@@ -18,7 +18,7 @@ target:
 debug_info:
 {
   path: "C:/work/no_gfx_api/build/test.pdb"
-  timestamp: 66201470096673
+  timestamp: 66201488707874
 }
 debug_info:
 {
@@ -28,10 +28,10 @@ debug_info:
 breakpoint:
 {
   source_location: "../main.odin:59:1"
-  hit_count: 1
+  hit_count: 0
 }
 breakpoint:
 {
   source_location: "../main.odin:67:1"
-  hit_count: 1
+  hit_count: 0
 }

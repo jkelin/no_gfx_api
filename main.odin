@@ -36,7 +36,8 @@ main :: proc()
     gpu.init(window)
     defer gpu.cleanup()
 
-    swapchain := gpu.swapchain_acquire_next()
+    swapchain := gpu.get_swapchain(window)
+    //swapchain := gpu.swapchain_acquire_next()
 
     vert_shader := gpu.shader_create(#load("shaders/test.vert.spv", []u32), .Vertex)
     frag_shader := gpu.shader_create(#load("shaders/test.frag.spv", []u32), .Fragment)
@@ -75,9 +76,14 @@ main :: proc()
     gpu.cmd_set_shaders(cmd_buf, vert_shader, frag_shader)
     gpu.cmd_set_depth_state(cmd_buf, {})
     gpu.cmd_set_blend_state(cmd_buf, {})
-    gpu.cmd_draw_indexed_instanced(cmd_buf, verts_local, nil, indices_local, 3, 1)
+    Vert_Data :: struct {
+        verts: rawptr
+    }
+    verts_data := gpu.arena_alloc(&arena, Vert_Data)
+    verts_data.cpu.verts = verts_local
+    gpu.cmd_draw_indexed_instanced(cmd_buf, verts_data.gpu, nil, indices_local, 3, 1)
     gpu.cmd_end_render_pass(cmd_buf)
     gpu.queue_submit(queue, { cmd_buf })
 
-    gpu.swapchain_acquire_next()
+    // gpu.swapchain_acquire_next()
 }

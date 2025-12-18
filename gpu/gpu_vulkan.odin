@@ -6,13 +6,10 @@ import "core:log"
 import "base:runtime"
 import vmem "core:mem/virtual"
 import "core:mem"
+import rbt "core:container/rbtree"
 
 import sdl "vendor:sdl3"
 import vk "vendor:vulkan"
-
-// NOTE: "GPU Pointers" are actually fake and contain 28 (high) bits of index (+1) into gpu_allocs
-// and 36 bits of byte offset from that buffer. They still support pointer arithmetic
-// and act like pointers. The nil pointer is reserved. See "gpu_ptr_..." procs for more info.
 
 PUSH_CONSTANTS_SIZE :: size_of(rawptr) * 2
 
@@ -26,6 +23,13 @@ GPU_Alloc_Meta :: struct #all_or_none
 }
 
 @(private="file")
+Alloc_Range :: struct
+{
+    ptr: u64,
+    size: u32,
+}
+
+@(private="file")
 Context :: struct
 {
     instance: vk.Instance,
@@ -35,6 +39,7 @@ Context :: struct
     gpu_allocs: [dynamic]GPU_Alloc_Meta,
     cpu_ptr_to_alloc: map[rawptr]u32,  // Each entry has an index to its corresponding GPU allocation
     gpu_ptr_to_alloc: map[rawptr]u32,  // From base GPU allocation pointer to metadata
+    alloc_tree: rbt.Tree(Alloc_Range, u32),
 
     phys_device: vk.PhysicalDevice,
     device: vk.Device,
@@ -309,14 +314,14 @@ _get_swapchain :: proc(window: ^sdl.Window) -> vk.ImageView
     return ctx.swapchain.image_views[0]
 }
 
-swapchain_acquire_next :: proc() -> vk.ImageView
+swapchain_wait_next :: proc() -> vk.ImageView
 {
     return {}
 }
 
 swapchain_present :: proc()
 {
-    
+
 }
 
 _mem_alloc :: proc(bytes: u64, align: u64 = 1, mem_type := Memory.Default) -> rawptr
@@ -385,7 +390,7 @@ _mem_alloc :: proc(bytes: u64, align: u64 = 1, mem_type := Memory.Default) -> ra
         return ptr
     }
 
-    return gpu_ptr_pack(gpu_alloc_idx, 0)
+    return rawptr(uintptr(addr))
 }
 
 _mem_free :: proc(ptr: rawptr, loc := #caller_location)
@@ -410,7 +415,8 @@ _host_to_device_ptr :: proc(ptr: rawptr) -> rawptr
         return {}
     }
 
-    return gpu_ptr_pack(meta_idx, 0)
+    meta := ctx.gpu_allocs[meta_idx]
+    return rawptr(uintptr(meta.device_address))
 }
 
 // Textures
@@ -512,10 +518,13 @@ _cmd_mem_copy :: proc(cmd_buf: Command_Buffer, src, dst: rawptr, bytes: u64)
 {
     vk_cmd_buf := cast(vk.CommandBuffer) cmd_buf
 
-    src_buffer_idx, src_offset := gpu_ptr_unpack(src)
-    dst_buffer_idx, dst_offset := gpu_ptr_unpack(dst)
-    src_buf := ctx.gpu_allocs[src_buffer_idx].buf_handle
-    dst_buf := ctx.gpu_allocs[dst_buffer_idx].buf_handle
+    src_buf, src_offset, ok_s := compute_buf_offset_from_gpu_ptr(src)
+    dst_buf, dst_offset, ok_d := compute_buf_offset_from_gpu_ptr(dst)
+    if !ok_s || !ok_d
+    {
+        log.error("alloc not found")
+        return
+    }
 
     copy_regions := []vk.BufferCopy {
         {
@@ -648,12 +657,14 @@ _cmd_draw_indexed_instanced :: proc(cmd_buf: Command_Buffer, vertex_data: rawptr
 {
     vk_cmd_buf := cast(vk.CommandBuffer) cmd_buf
 
-    vert_addr := gpu_ptr_to_device_address(vertex_data)
-    pixel_addr := gpu_ptr_to_device_address(pixel_data)
-    indices_buf_idx, indices_offset := gpu_ptr_unpack(indices)
-    indices_buf := ctx.gpu_allocs[indices_buf_idx].buf_handle
+    indices_buf, indices_offset, ok_i := compute_buf_offset_from_gpu_ptr(indices)
+    if !ok_i
+    {
+        log.error("Indices alloc not found")
+        return
+    }
 
-    ptrs := []rawptr { vert_addr, pixel_addr }
+    ptrs := []rawptr { vertex_data, pixel_data }
     assert(PUSH_CONSTANTS_SIZE == len(ptrs) * size_of(ptrs[0]))
     vk.CmdPushConstants(vk_cmd_buf, ctx.common_pipeline_layout, { .VERTEX, .FRAGMENT }, 0, PUSH_CONSTANTS_SIZE, raw_data(ptrs))
 
@@ -725,36 +736,6 @@ align_up :: proc(x, align: u64) -> (aligned: u64)
 {
     assert(0 == (align & (align - 1)), "must align to a power of two")
     return (x + (align - 1)) &~ (align - 1)
-}
-
-// "Fake GPU pointer" procs
-Offset_Num_Bits :: 36
-
-@(private="file")
-gpu_ptr_pack :: #force_inline proc(buf_idx: u32, offset: u64) -> rawptr
-{
-    high := u64(buf_idx + 1) << Offset_Num_Bits
-    low_mask := ((u64(1) << Offset_Num_Bits) - 1)
-    low := offset & low_mask
-    return cast(rawptr) cast(uintptr) (high | low)
-}
-
-@(private="file")
-gpu_ptr_unpack :: #force_inline proc(ptr: rawptr) -> (buf_idx: u32, offset: u64)
-{
-    ptr_u64 := u64(uintptr(ptr))
-    buf_idx = u32(ptr_u64 >> Offset_Num_Bits) - 1
-    mask := ((u64(1) << Offset_Num_Bits) - 1)
-    offset = ptr_u64 & mask
-    return buf_idx, offset
-}
-
-@(private="file")
-gpu_ptr_to_device_address :: #force_inline proc(ptr: rawptr) -> rawptr
-{
-    if ptr == nil do return nil
-    buf_idx, offset := gpu_ptr_unpack(ptr)
-    return auto_cast (cast(uintptr) ctx.gpu_allocs[buf_idx].device_address + uintptr(offset))
 }
 
 // Scratch arenas
@@ -907,4 +888,25 @@ Swapchain :: struct
     images: []vk.Image,
     image_views: []vk.ImageView,
     present_semaphores: []vk.Semaphore,
+}
+
+// NOTE: This is slow but unfortunately needed for some things. Vulkan
+// is still a "buffer object" centric API.
+@(private="file")
+search_alloc_from_gpu_ptr :: proc(ptr: rawptr) -> (res: u32, ok: bool)
+{
+    return {}, false
+}
+
+@(private="file")
+compute_buf_offset_from_gpu_ptr :: proc(ptr: rawptr) -> (buf: vk.Buffer, offset: u32, ok: bool)
+{
+    alloc_idx, ok_s := search_alloc_from_gpu_ptr(ptr)
+    if !ok_s do return {}, {}, false
+
+    alloc := ctx.gpu_allocs[alloc_idx]
+
+    buf = alloc.buf_handle
+    offset = u32(uintptr(ptr) - uintptr(alloc.device_address))
+    return buf, offset, true
 }

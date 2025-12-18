@@ -215,7 +215,7 @@ arena_alloc_untyped :: proc(using arena: ^Arena, bytes: u64, align: u64 = 16) ->
     return
 }
 
-arena_alloc :: proc(using arena: ^Arena, $T: typeid, count: u64) -> Allocation(T)
+arena_alloc :: proc(using arena: ^Arena, $T: typeid) -> Allocation(T)
 {
     alloc_cpu, alloc_gpu := arena_alloc_untyped(arena, size_of(T), align_of(T))
     return {
