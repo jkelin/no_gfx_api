@@ -7,6 +7,7 @@ import "core:mem"
 import vmem "core:mem/virtual"
 import str "core:strings"
 import "base:runtime"
+import fp "core:path/filepath"
 
 main :: proc()
 {
@@ -17,6 +18,16 @@ main :: proc()
     }
 
     path := os.args[1]
+    shader_type_str := fp.ext(fp.stem(path))
+    shader_type: Shader_Type
+    if shader_type_str == ".vert" {
+        shader_type = .Vertex
+    } else if shader_type_str == ".frag" {
+        shader_type = .Fragment
+    } else {
+        fmt.println("Could not infer shader type. Try '*.vert.musl' or '*.frag.musl'.")
+        return
+    }
 
     init_scratch_arenas()
     perm_arena_backing: vmem.Arena
@@ -35,7 +46,7 @@ main :: proc()
     tokens := lex_file(file_content, allocator = perm_arena)
     ast, ok_p := parse_file(path, tokens, allocator = perm_arena)
     if !ok_p do return
-    codegen(ast)
+    codegen(ast, shader_type)
 }
 
 load_file_and_null_terminate :: proc(path: string, allocator: runtime.Allocator) -> ([]u8, bool)

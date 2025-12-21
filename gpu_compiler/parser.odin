@@ -18,6 +18,9 @@ Any_Node :: union
 Ast :: struct
 {
     used_types: map[Ast_Type]struct{},
+    used_in_locations: map[u32]struct{},
+    used_out_locations: map[u32]struct{},
+    used_data_type: string,
     scope: ^Ast_Scope,
 }
 
@@ -67,6 +70,7 @@ Ast_Proc_Decl :: struct
     using base_decl: Ast_Decl,
     args: []^Ast_Decl_Arg,
     return_type: ^Ast_Type,
+    return_attr: Maybe(Ast_Attribute),
     statements: []^Ast_Statement,
 }
 
@@ -95,8 +99,8 @@ Ast_Attribute_Type :: enum
     Data,
 
     // With args:
-    Loc,
-    Target
+    Out_Loc,
+    In_Loc,
 }
 
 Ast_Attribute :: struct
@@ -232,6 +236,9 @@ Parser :: struct
     error: bool,
     cur_scope: ^Ast_Scope,
     used_types: map[Ast_Type]struct{},
+    used_out_locations: map[u32]struct{},
+    used_in_locations: map[u32]struct{},
+    used_data_type: string,
 }
 
 _parse_file :: proc(using p: ^Parser) -> Ast
@@ -279,6 +286,9 @@ _parse_file :: proc(using p: ^Parser) -> Ast
 
     ast.scope.decls = slice.clone(tmp_list[:])
     ast.used_types = used_types
+    ast.used_out_locations = used_out_locations
+    ast.used_in_locations = used_in_locations
+    ast.used_data_type = used_data_type
     return ast
 }
 
@@ -311,8 +321,12 @@ parse_proc_def :: proc(using p: ^Parser) -> ^Ast_Decl
     node.args = parse_decl_list(p)
     required_token(p, .RParen)
 
-    if optional_token(p, .Arrow) {
+    if optional_token(p, .Arrow)
+    {
         node.return_type = parse_type(p)
+        if tokens[at].type == .Attribute {
+            node.return_attr = parse_attribute(p)
+        }
     }
 
     required_token(p, .LBrace)
@@ -513,6 +527,10 @@ parse_decl_list_elem :: proc(using p: ^Parser) -> ^Ast_Decl_Arg
 
     node.type = parse_type(p)
     node.attr = parse_attribute(p)
+    if node.attr != nil && node.attr.?.type == .Data {
+        used_data_type = node.type.name
+    }
+
     return node
 }
 
@@ -566,28 +584,37 @@ parse_attribute :: proc(using p: ^Parser) -> Maybe(Ast_Attribute)
         case "vert_id": attr.type = .Vert_ID
         case "position": attr.type = .Position
         case "data": attr.type = .Data
-        case "loc":
+        case "in_loc":
         {
             // ??? Why is the compiler making me do this?
-            //attr.type = .Loc,
-            attr.type, _ = .Loc,
+            attr.type, _ = .In_Loc,
             required_token(p, .LParen)
             num_token := required_token(p, .NumLit)
             val, ok := num_token.value.(u64)
             if !ok do parse_error_on_token(p, num_token, "Expecting integer value on attribute arguments.")
             attr.arg = u32(val)
             required_token(p, .RParen)
+
+            // Add it to the location set
+            used_in_locations[attr.arg] = {}
         }
-        case "target":
+        case "out_loc":
         {
             // ??? Why is the compiler making me do this?
-            attr.type, _ = .Loc,
+            attr.type, _ = .Out_Loc,
             required_token(p, .LParen)
             num_token := required_token(p, .NumLit)
             val, ok := num_token.value.(u64)
             if !ok do parse_error_on_token(p, num_token, "Expecting integer value on attribute arguments.")
             attr.arg = u32(val)
             required_token(p, .RParen)
+
+            // Add it to the location set
+            used_out_locations[attr.arg] = {}
+        }
+        case:
+        {
+            parse_error(p, "Unknown attribute '%v'.", token.text)
         }
     }
 
