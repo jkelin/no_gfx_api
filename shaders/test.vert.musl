@@ -16,10 +16,10 @@ Output :: struct
     color: vec3 @out_loc(0),
 }
 
-main :: (vert_id: u32 @vert_id, data: ^Data @data) -> Output
+main :: (vert_id: uint @vert_id, data: ^Data @data) -> Output
 {
-    out: Output;
-    out.pos = data.verts[vert_id].pos;
-    out.color = vec3(1.0, 0.0, 0.0);
-    return out;
+    vert_out: Output;
+    vert_out.pos = data.verts[vert_id].pos;
+    vert_out.color = vec3(1.0, 0.0, 0.0);
+    return vert_out;
 }

@@ -31,7 +31,7 @@ main :: proc()
 
     init_scratch_arenas()
     perm_arena_backing: vmem.Arena
-    ok_a := vmem.arena_init_growing(&perm_arena_backing, 1024 * 1024 * 1024)
+    ok_a := vmem.arena_init_growing(&perm_arena_backing)
     assert(ok_a == nil)
     perm_arena := vmem.arena_allocator(&perm_arena_backing)
     defer free_all(perm_arena)
@@ -46,6 +46,8 @@ main :: proc()
     tokens := lex_file(file_content, allocator = perm_arena)
     ast, ok_p := parse_file(path, tokens, allocator = perm_arena)
     if !ok_p do return
+    ok_t := typecheck_ast(ast, allocator = perm_arena)
+    if !ok_t do return
     codegen(ast, shader_type)
 }
 

@@ -16,7 +16,7 @@ Command_Buffer :: distinct Handle
 Queue :: distinct Handle
 Semaphore :: distinct Handle
 Shader :: distinct Handle
-Texture_View :: distinct [4]u64
+Texture_View_Handle :: vk.ImageView  // @tmp
 
 // Enums
 Memory :: enum { Default = 0, GPU, Readback }
@@ -35,6 +35,8 @@ Depth_Flags :: bit_set[Depth_Mode; u32]
 Hazard :: enum { Draw_Arguments = 0, Descriptors, Depth_Stencil }
 Hazard_Flags :: bit_set[Hazard; u32]
 Stage :: enum { Transfer = 0, Compute, Raster_Color_Out, Fragment_Shader, Vertex_Shader, All }
+ColorComponentFlag :: enum { R = 0, G = 1, B = 2, A = 3 }
+ColorComponentFlags :: distinct bit_set[ColorComponentFlag; u8]
 
 // Constants
 All_Mips: u8 : max(u8)
@@ -63,7 +65,7 @@ Texture_View_Desc :: struct
 
 Render_Attachment :: struct
 {
-    view:         vk.ImageView,  // TEMPORARY
+    view:         Texture_View,
     load_op:      Load_Op,
     store_op:     Store_Op,
     clear_color:  [4]f32,
@@ -73,9 +75,9 @@ Render_Attachment :: struct
 
 Render_Pass_Desc :: struct
 {
-    render_area_offset: [2]u32,
+    render_area_offset: [2]i32,
     render_area_size:   [2]u32,  // 0 = full texture size
-    layer_count:        u32,
+    layer_count:        u32,     // 0 = 1
     view_mask:          u32,
     color_attachments:  []Render_Attachment,
     depth_attachment:   Maybe(Render_Attachment),
@@ -90,6 +92,13 @@ Texture :: struct
     handle: Texture_Handle
 }
 
+Texture_View :: struct
+{
+    width: u32,
+    height: u32,
+    handle: Texture_View_Handle,
+}
+
 Depth_State :: struct
 {
     mode: Depth_Flags,
@@ -98,6 +107,7 @@ Depth_State :: struct
 
 Blend_State :: struct
 {
+    enable: bool,
     color_op: Blend_Op,
     src_color_factor: Blend_Factor,
     dst_color_factor: Blend_Factor,
@@ -109,10 +119,11 @@ Blend_State :: struct
 
 // Procedures
 
-// Initialization and interaction with the OS. This is simpler than it would actually be, for brevity.
+// Initialization and interaction with the OS. This is simpler than it would probably be, for brevity.
 init: proc(window: ^sdl.Window) : _init
 cleanup: proc() : _cleanup
-swapchain_acquire_next: proc() -> vk.ImageView : _swapchain_acquire_next
+wait_idle: proc() : _wait_idle
+swapchain_acquire_next: proc() -> Texture_View : _swapchain_acquire_next  // Blocks CPU until at least one frame is available.
 swapchain_present: proc(queue: Queue, sem_wait: Semaphore, wait_value: u64) : _swapchain_present
 
 // Memory
@@ -127,6 +138,7 @@ host_to_device_ptr: proc(ptr: rawptr) -> rawptr : _host_to_device_ptr  // Only s
 
 // Shaders
 shader_create: proc(code: []u32, type: Shader_Type) -> Shader : _shader_create
+shader_destroy: proc(shader: ^Shader) : _shader_destroy
 
 // Semaphores
 semaphore_create: proc(init_value: u64 = 0) -> Semaphore : _semaphore_create

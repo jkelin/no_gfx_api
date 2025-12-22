@@ -30,6 +30,14 @@ Alloc_Range :: struct
 }
 
 @(private="file")
+Timeline :: struct
+{
+    sem: vk.Semaphore,
+    val: u64,
+    recording: bool,
+}
+
+@(private="file")
 Context :: struct
 {
     instance: vk.Instance,
@@ -37,6 +45,7 @@ Context :: struct
     surface: vk.SurfaceKHR,
 
     gpu_allocs: [dynamic]GPU_Alloc_Meta,
+    // TODO: freelist of gpu allocs
     cpu_ptr_to_alloc: map[rawptr]u32,  // Each entry has an index to its corresponding GPU allocation
     gpu_ptr_to_alloc: map[rawptr]u32,  // From base GPU allocation pointer to metadata
     alloc_tree: rbt.Tree(Alloc_Range, u32),
@@ -46,8 +55,9 @@ Context :: struct
     queue: vk.Queue,
     queue_family_idx: u32,
 
-    // TEMPORARY
     cmd_pool: vk.CommandPool,
+    cmd_bufs: [10]vk.CommandBuffer,
+    cmd_bufs_timelines: [10]Timeline,
 
     // Common resources
     common_pipeline_layout: vk.PipelineLayout,
@@ -67,6 +77,8 @@ vk_logger: log.Logger
 _init :: proc(window: ^sdl.Window)
 {
     init_scratch_arenas()
+
+    scratch, _ := acquire_scratch()
 
     // Load vulkan function pointers
     vk.load_proc_addresses_global(cast(rawptr) sdl.Vulkan_GetVkGetInstanceProcAddr())
@@ -94,7 +106,7 @@ _init :: proc(window: ^sdl.Window)
                 vk.EXT_DEBUG_UTILS_EXTENSION_NAME,
                 vk.KHR_WIN32_SURFACE_EXTENSION_NAME,
             }
-        }, context.temp_allocator)
+        }, allocator = scratch)
 
         debug_messenger_ci := vk.DebugUtilsMessengerCreateInfoEXT {
             sType = .DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
@@ -154,7 +166,7 @@ _init :: proc(window: ^sdl.Window)
     phys_device_count: u32
     vk_check(vk.EnumeratePhysicalDevices(ctx.instance, &phys_device_count, nil))
     if phys_device_count == 0 do fatal_error("Did not find any GPUs!")
-    phys_devices := make([]vk.PhysicalDevice, phys_device_count, context.temp_allocator)
+    phys_devices := make([]vk.PhysicalDevice, phys_device_count, allocator = scratch)
     vk_check(vk.EnumeratePhysicalDevices(ctx.instance, &phys_device_count, raw_data(phys_devices)))
 
     chosen_phys_device: vk.PhysicalDevice
@@ -164,7 +176,7 @@ _init :: proc(window: ^sdl.Window)
     {
         queue_family_count: u32
         vk.GetPhysicalDeviceQueueFamilyProperties(candidate, &queue_family_count, nil)
-        queue_families := make([]vk.QueueFamilyProperties, queue_family_count, context.temp_allocator)
+        queue_families := make([]vk.QueueFamilyProperties, queue_family_count, allocator = scratch)
         vk.GetPhysicalDeviceQueueFamilyProperties(candidate, &queue_family_count, raw_data(queue_families))
 
         for family, i in queue_families
@@ -278,13 +290,37 @@ _init :: proc(window: ^sdl.Window)
 
     vk.GetDeviceQueue(ctx.device, queue_family_idx, 0, &ctx.queue)
 
-    // TEMPORARY
+    // Command buffers
     cmd_pool_ci := vk.CommandPoolCreateInfo {
         sType = .COMMAND_POOL_CREATE_INFO,
         queueFamilyIndex = ctx.queue_family_idx,
-        flags = { .TRANSIENT }
+        flags = { .TRANSIENT, .RESET_COMMAND_BUFFER }
     }
     vk_check(vk.CreateCommandPool(ctx.device, &cmd_pool_ci, nil, &ctx.cmd_pool))
+
+    cmd_buf_ai := vk.CommandBufferAllocateInfo {
+        sType = .COMMAND_BUFFER_ALLOCATE_INFO,
+        commandPool = ctx.cmd_pool,
+        level = .PRIMARY,
+        commandBufferCount = len(ctx.cmd_bufs),
+    }
+    vk_check(vk.AllocateCommandBuffers(ctx.device, &cmd_buf_ai, &ctx.cmd_bufs[0]))
+
+    for &timeline in ctx.cmd_bufs_timelines
+    {
+        next_sem: rawptr
+        next_sem = &vk.SemaphoreTypeCreateInfo {
+            sType = .SEMAPHORE_TYPE_CREATE_INFO,
+            pNext = next_sem,
+            semaphoreType = .TIMELINE,
+            initialValue = 0,
+        }
+        sem_ci := vk.SemaphoreCreateInfo {
+            sType = .SEMAPHORE_CREATE_INFO,
+            pNext = next_sem
+        }
+        vk_check(vk.CreateSemaphore(ctx.device, &sem_ci, nil, &timeline.sem))
+    }
 
     // Common resources
     {
@@ -327,10 +363,24 @@ _init :: proc(window: ^sdl.Window)
 
 _cleanup :: proc()
 {
+    vk.DestroyCommandPool(ctx.device, ctx.cmd_pool, nil)
+
+    destroy_swapchain(ctx.swapchain)
+    for timeline in ctx.cmd_bufs_timelines {
+        vk.DestroySemaphore(ctx.device, timeline.sem, nil)
+    }
+
+    vk.DestroyPipelineLayout(ctx.device, ctx.common_pipeline_layout, nil)
+
     vk.DestroyDevice(ctx.device, nil)
 }
 
-_swapchain_acquire_next :: proc() -> vk.ImageView
+_wait_idle :: proc()
+{
+    vk.DeviceWaitIdle(ctx.device)
+}
+
+_swapchain_acquire_next :: proc() -> Texture_View
 {
     fence_ci := vk.FenceCreateInfo { sType = .FENCE_CREATE_INFO }
     fence: vk.Fence
@@ -343,14 +393,7 @@ _swapchain_acquire_next :: proc() -> vk.ImageView
 
     // Transition layout from swapchain
     {
-        cmd_buf_ai := vk.CommandBufferAllocateInfo {
-            sType = .COMMAND_BUFFER_ALLOCATE_INFO,
-            commandPool = ctx.cmd_pool,
-            level = .PRIMARY,
-            commandBufferCount = 1,
-        }
-        cmd_buf: vk.CommandBuffer
-        vk_check(vk.AllocateCommandBuffers(ctx.device, &cmd_buf_ai, &cmd_buf))
+        cmd_buf := vk_acquire_cmd_buf(ctx.queue)
 
         cmd_buf_bi := vk.CommandBufferBeginInfo {
             sType = .COMMAND_BUFFER_BEGIN_INFO,
@@ -381,19 +424,19 @@ _swapchain_acquire_next :: proc() -> vk.ImageView
 
         vk_check(vk.EndCommandBuffer(cmd_buf))
 
-        submit_info := vk.SubmitInfo {
-            sType = .SUBMIT_INFO,
-            commandBufferCount = 1,
-            pCommandBuffers = &cmd_buf,
-        }
-        vk_check(vk.QueueSubmit(ctx.queue, 1, &submit_info, {}))
+        vk_submit_cmd_buf(ctx.queue, cmd_buf)
     }
 
-    return ctx.swapchain.image_views[ctx.swapchain_image_idx]
+    return Texture_View {
+        width = ctx.swapchain.width,
+        height = ctx.swapchain.height,
+        handle = ctx.swapchain.image_views[ctx.swapchain_image_idx],
+    }
 }
 
 _swapchain_present :: proc(queue: Queue, sem_wait: Semaphore, wait_value: u64)
 {
+    vk_queue := cast(vk.Queue) queue
     vk_sem_wait := transmute(vk.Semaphore) sem_wait
 
     present_semaphore := ctx.swapchain.present_semaphores[ctx.swapchain_image_idx]
@@ -407,13 +450,7 @@ _swapchain_present :: proc(queue: Queue, sem_wait: Semaphore, wait_value: u64)
         // Switch to optimal layout for presentation (this is mandatory)
         cmd_buf: vk.CommandBuffer
         {
-            cmd_buf_ai := vk.CommandBufferAllocateInfo {
-                sType = .COMMAND_BUFFER_ALLOCATE_INFO,
-                commandPool = ctx.cmd_pool,
-                level = .PRIMARY,
-                commandBufferCount = 1,
-            }
-            vk_check(vk.AllocateCommandBuffers(ctx.device, &cmd_buf_ai, &cmd_buf))
+            cmd_buf = vk_acquire_cmd_buf(vk_queue)
 
             cmd_buf_bi := vk.CommandBufferBeginInfo {
                 sType = .COMMAND_BUFFER_BEGIN_INFO,
@@ -445,6 +482,9 @@ _swapchain_present :: proc(queue: Queue, sem_wait: Semaphore, wait_value: u64)
             vk_check(vk.EndCommandBuffer(cmd_buf))
         }
 
+        timeline := vk_get_cmd_buf_timeline(vk_queue, cmd_buf)
+        timeline.val += 1
+
         wait_stage_flags := vk.PipelineStageFlags { .COLOR_ATTACHMENT_OUTPUT }
         next: rawptr
         next = &vk.TimelineSemaphoreSubmitInfo {
@@ -452,7 +492,12 @@ _swapchain_present :: proc(queue: Queue, sem_wait: Semaphore, wait_value: u64)
             pNext = next,
             waitSemaphoreValueCount = 1,
             pWaitSemaphoreValues = raw_data([]u64 {
-                wait_value
+                wait_value,
+            }),
+            signalSemaphoreValueCount = 2,
+            pSignalSemaphoreValues = raw_data([]u64 {
+                {},
+                timeline.val,
             })
         }
         submit_info := vk.SubmitInfo {
@@ -467,12 +512,15 @@ _swapchain_present :: proc(queue: Queue, sem_wait: Semaphore, wait_value: u64)
             pWaitDstStageMask = raw_data([]vk.PipelineStageFlags {
                 wait_stage_flags,
             }),
-            signalSemaphoreCount = 1,
+            signalSemaphoreCount = 2,
             pSignalSemaphores = raw_data([]vk.Semaphore {
-                present_semaphore
+                present_semaphore,
+                timeline.sem,
             }),
         }
         vk_check(vk.QueueSubmit(queue, 1, &submit_info, {}))
+
+        timeline.recording = false
     }
 
     vk_check(vk.QueuePresentKHR(ctx.queue, &{
@@ -559,15 +607,28 @@ _mem_alloc :: proc(bytes: u64, align: u64 = 1, mem_type := Memory.Default) -> ra
 
 _mem_free :: proc(ptr: rawptr, loc := #caller_location)
 {
-    _, cpu_found := ctx.cpu_ptr_to_alloc[ptr]
-    _, gpu_found := ctx.gpu_ptr_to_alloc[ptr]
+    cpu_alloc, cpu_found := ctx.cpu_ptr_to_alloc[ptr]
+    gpu_alloc, gpu_found := ctx.gpu_ptr_to_alloc[ptr]
     if !cpu_found && !gpu_found
     {
         log.error("Attempting to free a pointer which is not allocated.", location = loc)
         return
     }
 
-    // TODO: Free stuff
+    if cpu_found
+    {
+        meta := ctx.gpu_allocs[cpu_alloc]
+        vk.FreeMemory(ctx.device, meta.mem_handle, nil)
+        vk.DestroyBuffer(ctx.device, meta.buf_handle, nil)
+        delete_key(&ctx.cpu_ptr_to_alloc, ptr)
+    }
+    else if gpu_found
+    {
+        meta := ctx.gpu_allocs[gpu_alloc]
+        vk.FreeMemory(ctx.device, meta.mem_handle, nil)
+        vk.DestroyBuffer(ctx.device, meta.buf_handle, nil)
+        delete_key(&ctx.gpu_ptr_to_alloc, ptr)
+    }
 }
 
 _host_to_device_ptr :: proc(ptr: rawptr) -> rawptr
@@ -620,32 +681,11 @@ _shader_create :: proc(code: []u32, type: Shader_Type) -> Shader
     return transmute(Shader) shader
 }
 
-@(private="file")
-to_vk_shader_stage :: #force_inline proc(type: Shader_Type) -> vk.ShaderStageFlags
+_shader_destroy :: proc(shader: ^Shader)
 {
-    switch type
-    {
-        case .Vertex: return { .VERTEX }
-        case .Fragment: return { .FRAGMENT }
-    }
-
-    return {}
-}
-
-@(private="file")
-to_vk_stage :: #force_inline proc(stage: Stage) -> vk.PipelineStageFlags
-{
-    switch stage
-    {
-        case .Transfer: return { .TRANSFER }
-        case .Compute: return { .COMPUTE_SHADER }
-        case .Raster_Color_Out: return { .COLOR_ATTACHMENT_OUTPUT }
-        case .Fragment_Shader: return { .FRAGMENT_SHADER }
-        case .Vertex_Shader: return { .VERTEX_SHADER }
-        case .All: return { .ALL_COMMANDS }
-    }
-
-    return {}
+    vk_shader := transmute(vk.ShaderEXT) (shader^)
+    vk.DestroyShaderEXT(ctx.device, vk_shader, nil)
+    shader^ = {}
 }
 
 // Semaphores
@@ -683,6 +723,8 @@ _semaphore_wait :: proc(sem: Semaphore, wait_value: u64)
 
 _semaphore_destroy :: proc(sem: ^Semaphore)
 {
+    vk_sem := transmute(vk.Semaphore) (sem^)
+    vk.DestroySemaphore(ctx.device, vk_sem, nil)
     sem^ = {}
 }
 
@@ -695,14 +737,9 @@ _get_queue :: proc() -> Queue
 
 _commands_begin :: proc(queue: Queue) -> Command_Buffer
 {
-    cmd_buf_ai := vk.CommandBufferAllocateInfo {
-        sType = .COMMAND_BUFFER_ALLOCATE_INFO,
-        commandPool = ctx.cmd_pool,
-        level = .PRIMARY,
-        commandBufferCount = 1,
-    }
-    cmd_buf: vk.CommandBuffer
-    vk_check(vk.AllocateCommandBuffers(ctx.device, &cmd_buf_ai, &cmd_buf))
+    vk_queue := cast(vk.Queue) queue
+
+    cmd_buf := vk_acquire_cmd_buf(vk_queue)
 
     cmd_buf_bi := vk.CommandBufferBeginInfo {
         sType = .COMMAND_BUFFER_BEGIN_INFO,
@@ -722,27 +759,9 @@ _queue_submit :: proc(queue: Queue, cmd_bufs: []Command_Buffer, signal_sem: Sema
     {
         vk_cmd_buf := cast(vk.CommandBuffer) cmd_buf
         vk_check(vk.EndCommandBuffer(vk_cmd_buf))
-    }
 
-    next: rawptr
-    next = &vk.TimelineSemaphoreSubmitInfo {
-        sType = .TIMELINE_SEMAPHORE_SUBMIT_INFO,
-        pNext = next,
-        signalSemaphoreValueCount = 1,
-        pSignalSemaphoreValues = raw_data([]u64 {
-            signal_value
-        })
+        vk_submit_cmd_buf(vk_queue, vk_cmd_buf, vk_signal_sem, signal_value)
     }
-    to_submit := transmute([]vk.CommandBuffer) cmd_bufs
-    submit_info := vk.SubmitInfo {
-        sType = .SUBMIT_INFO,
-        pNext = next if signal_sem != nil else nil,
-        commandBufferCount = u32(len(to_submit)),
-        pCommandBuffers = raw_data(to_submit),
-        signalSemaphoreCount = 1 if signal_sem != nil else 0,
-        pSignalSemaphores = &vk_signal_sem if signal_sem != nil else nil
-    }
-    vk_check(vk.QueueSubmit(vk_queue, 1, &submit_info, {}))
 }
 
 // Commands
@@ -807,12 +826,11 @@ _cmd_set_depth_state :: proc(cmd_buf: Command_Buffer, state: Depth_State)
 {
     vk_cmd_buf := cast(vk.CommandBuffer) cmd_buf
 
-    vk.CmdSetDepthCompareOp(vk_cmd_buf, .LESS)
-    vk.CmdSetDepthTestEnable(vk_cmd_buf, false)
-    vk.CmdSetDepthWriteEnable(vk_cmd_buf, false)
+    vk.CmdSetDepthCompareOp(vk_cmd_buf, to_vk_compare_op(state.compare))
+    vk.CmdSetDepthTestEnable(vk_cmd_buf, .Read in state.mode)
+    vk.CmdSetDepthWriteEnable(vk_cmd_buf, .Write in state.mode)
     vk.CmdSetDepthBiasEnable(vk_cmd_buf, false)
     vk.CmdSetDepthClipEnableEXT(vk_cmd_buf, true)
-
     vk.CmdSetStencilTestEnable(vk_cmd_buf, false)
 }
 
@@ -820,62 +838,88 @@ _cmd_set_blend_state :: proc(cmd_buf: Command_Buffer, state: Blend_State)
 {
     vk_cmd_buf := cast(vk.CommandBuffer) cmd_buf
 
-    b32_false := b32(false)
-    vk.CmdSetColorBlendEnableEXT(vk_cmd_buf, 0, 1, &b32_false)
+    enable_b32 := b32(state.enable)
+    vk.CmdSetColorBlendEnableEXT(vk_cmd_buf, 0, 1, &enable_b32)
+
+    vk.CmdSetColorBlendEquationEXT(vk_cmd_buf, 0, 1, &vk.ColorBlendEquationEXT {
+        srcColorBlendFactor = {},
+        dstColorBlendFactor = {},
+        colorBlendOp        = {},
+        srcAlphaBlendFactor = {},
+        dstAlphaBlendFactor = {},
+        alphaBlendOp        = {},
+    })
+
+    color_write_mask := transmute(vk.ColorComponentFlags) cast(u32) state.color_write_mask
+    vk.CmdSetColorWriteMaskEXT(vk_cmd_buf, 0, 1, &color_write_mask)
 }
 
-_cmd_dispatch :: proc() {}
-_cmd_dispatch_indirect :: proc() {}
+// _cmd_dispatch :: proc() {}
+// _cmd_dispatch_indirect :: proc() {}
 
 _cmd_begin_render_pass :: proc(cmd_buf: Command_Buffer, desc: Render_Pass_Desc)
 {
     vk_cmd_buf := cast(vk.CommandBuffer) cmd_buf
 
-    clear_color := desc.color_attachments[0].clear_color
+    scratch, _ := acquire_scratch()
 
-    color_attachment := vk.RenderingAttachmentInfo {
-        sType = .RENDERING_ATTACHMENT_INFO,
-        imageView = desc.color_attachments[0].view,
-        imageLayout = .GENERAL,
-        loadOp = .CLEAR,
-        storeOp = .STORE,
-        clearValue = {
-            color = { float32 = { clear_color.r, clear_color.g, clear_color.b, clear_color.a } }
-        }
+    vk_color_attachments := make([]vk.RenderingAttachmentInfo, len(desc.color_attachments), allocator = scratch)
+    for &vk_attach, i in vk_color_attachments {
+        vk_attach = to_vk_render_attachment(desc.color_attachments[i])
     }
+
+    vk_depth_attachment: vk.RenderingAttachmentInfo
+    vk_depth_attachment_ptr: ^vk.RenderingAttachmentInfo
+    if desc.depth_attachment != nil
+    {
+        vk_depth_attachment = to_vk_render_attachment(desc.depth_attachment.?)
+        vk_depth_attachment_ptr = &vk_depth_attachment
+    }
+
+    width := desc.render_area_size.x
+    if width == {} {
+        width = desc.color_attachments[0].view.width
+    }
+    height := desc.render_area_size.y
+    if height == {} {
+        height = desc.color_attachments[0].view.height
+    }
+    layer_count := desc.layer_count
+    if layer_count == 0 {
+        layer_count = 1
+    }
+
     rendering_info := vk.RenderingInfo {
         sType = .RENDERING_INFO,
         renderArea = {
-            offset = { 0, 0 },
-            extent = { 1900, 1900 }
+            offset = { desc.render_area_offset.x, desc.render_area_offset.y },
+            extent = { width, height }
         },
-        layerCount = 1,
-        colorAttachmentCount = 1,
-        pColorAttachments = &color_attachment,
-        pDepthAttachment = nil,
+        layerCount = layer_count,
+        colorAttachmentCount = u32(len(vk_color_attachments)),
+        pColorAttachments = raw_data(vk_color_attachments),
+        pDepthAttachment = vk_depth_attachment_ptr,
     }
     vk.CmdBeginRendering(vk_cmd_buf, &rendering_info)
 
-    sample_mask := vk.SampleMask(1)
-    vk.CmdSetSampleMaskEXT(vk_cmd_buf, { ._1 }, &sample_mask)
-    vk.CmdSetAlphaToCoverageEnableEXT(vk_cmd_buf, false)
-    vk.CmdSetPolygonModeEXT(vk_cmd_buf, .FILL)
-    vk.CmdSetCullMode(vk_cmd_buf, {})
-    vk.CmdSetFrontFace(vk_cmd_buf, .COUNTER_CLOCKWISE)
-    vk.CmdSetDepthCompareOp(vk_cmd_buf, .LESS)
-    vk.CmdSetDepthTestEnable(vk_cmd_buf, false)
-    vk.CmdSetDepthWriteEnable(vk_cmd_buf, false)
-    vk.CmdSetDepthBiasEnable(vk_cmd_buf, false)
-    vk.CmdSetDepthClipEnableEXT(vk_cmd_buf, true)
+    // Blend state
     vk.CmdSetStencilTestEnable(vk_cmd_buf, false)
     b32_false := b32(false)
     vk.CmdSetColorBlendEnableEXT(vk_cmd_buf, 0, 1, &b32_false)
     color_mask := vk.ColorComponentFlags { .R, .G, .B, .A }
     vk.CmdSetColorWriteMaskEXT(vk_cmd_buf, 0, 1, &color_mask)
 
+    // Depth state
+    vk.CmdSetDepthCompareOp(vk_cmd_buf, .LESS)
+    vk.CmdSetDepthTestEnable(vk_cmd_buf, false)
+    vk.CmdSetDepthWriteEnable(vk_cmd_buf, false)
+    vk.CmdSetDepthBiasEnable(vk_cmd_buf, false)
+    vk.CmdSetDepthClipEnableEXT(vk_cmd_buf, true)
+
+    // Viewport
     viewport := vk.Viewport {
         x = 0, y = 0,
-        width = 1900, height = 1900,
+        width = f32(width), height = f32(height),
         minDepth = 0.0, maxDepth = 1.0,
     }
     vk.CmdSetViewportWithCount(vk_cmd_buf, 1, &viewport)
@@ -884,16 +928,24 @@ _cmd_begin_render_pass :: proc(cmd_buf: Command_Buffer, desc: Render_Pass_Desc)
             x = 0, y = 0
         },
         extent = {
-            width = 1900, height = 1900,
+            width = width, height = height,
         }
     }
     vk.CmdSetScissorWithCount(vk_cmd_buf, 1, &scissor)
     vk.CmdSetRasterizerDiscardEnable(vk_cmd_buf, false)
 
+    // Unused
     vk.CmdSetVertexInputEXT(vk_cmd_buf, 0, nil, 0, nil)
     vk.CmdSetRasterizationSamplesEXT(vk_cmd_buf, { ._1 })
     vk.CmdSetPrimitiveTopology(vk_cmd_buf, .TRIANGLE_LIST)
     vk.CmdSetPrimitiveRestartEnable(vk_cmd_buf, false)
+
+    sample_mask := vk.SampleMask(1)
+    vk.CmdSetSampleMaskEXT(vk_cmd_buf, { ._1 }, &sample_mask)
+    vk.CmdSetAlphaToCoverageEnableEXT(vk_cmd_buf, false)
+    vk.CmdSetPolygonModeEXT(vk_cmd_buf, .FILL)
+    vk.CmdSetCullMode(vk_cmd_buf, {})
+    vk.CmdSetFrontFace(vk_cmd_buf, .COUNTER_CLOCKWISE)
 }
 
 _cmd_end_render_pass :: proc(cmd_buf: Command_Buffer)
@@ -917,11 +969,6 @@ _cmd_draw_indexed_instanced :: proc(cmd_buf: Command_Buffer, vertex_data: rawptr
     ptrs := []rawptr { vertex_data, fragment_data }
     assert(PUSH_CONSTANTS_SIZE == len(ptrs) * size_of(ptrs[0]))
     vk.CmdPushConstants(vk_cmd_buf, ctx.common_pipeline_layout, { .VERTEX, .FRAGMENT }, 0, PUSH_CONSTANTS_SIZE, raw_data(ptrs))
-
-    // TMP
-    vk.CmdSetRasterizerDiscardEnable(vk_cmd_buf, false)
-    vk.CmdSetCullMode(vk_cmd_buf, {})
-    vk.CmdSetDepthTestEnable(vk_cmd_buf, {})
 
     vk.CmdBindIndexBuffer(vk_cmd_buf, indices_buf, vk.DeviceSize(indices_offset), .UINT32)
     vk.CmdDrawIndexed(vk_cmd_buf, index_count, instance_count, 0, 0, 0)
@@ -1045,6 +1092,8 @@ release_scratch :: #force_inline proc(allocator: mem.Allocator, temp: vmem.Arena
 @(private="file")
 create_swapchain :: proc(width: u32, height: u32) -> Swapchain
 {
+    scratch, _ := acquire_scratch()
+
     res: Swapchain
 
     surface_caps: vk.SurfaceCapabilitiesKHR
@@ -1055,7 +1104,7 @@ create_swapchain :: proc(width: u32, height: u32) -> Swapchain
 
     surface_format_count: u32
     vk_check(vk.GetPhysicalDeviceSurfaceFormatsKHR(ctx.phys_device, ctx.surface, &surface_format_count, nil))
-    surface_formats := make([]vk.SurfaceFormatKHR, surface_format_count, context.temp_allocator)
+    surface_formats := make([]vk.SurfaceFormatKHR, surface_format_count, allocator = scratch)
     vk_check(vk.GetPhysicalDeviceSurfaceFormatsKHR(ctx.phys_device, ctx.surface, &surface_format_count, raw_data(surface_formats)))
 
     surface_format := surface_formats[0]
@@ -1070,7 +1119,7 @@ create_swapchain :: proc(width: u32, height: u32) -> Swapchain
 
     present_mode_count: u32
     vk_check(vk.GetPhysicalDeviceSurfacePresentModesKHR(ctx.phys_device, ctx.surface, &present_mode_count, nil))
-    present_modes := make([]vk.PresentModeKHR, present_mode_count, context.temp_allocator)
+    present_modes := make([]vk.PresentModeKHR, present_mode_count, allocator = scratch)
     vk_check(vk.GetPhysicalDeviceSurfacePresentModesKHR(ctx.phys_device, ctx.surface, &present_mode_count, raw_data(present_modes)))
 
     present_mode := vk.PresentModeKHR.FIFO
@@ -1132,6 +1181,21 @@ create_swapchain :: proc(width: u32, height: u32) -> Swapchain
 }
 
 @(private="file")
+destroy_swapchain :: proc(swapchain: Swapchain)
+{
+    delete(swapchain.images)
+    for semaphore in swapchain.present_semaphores {
+        vk.DestroySemaphore(ctx.device, semaphore, nil)
+    }
+    delete(swapchain.present_semaphores)
+    for image_view in swapchain.image_views {
+        vk.DestroyImageView(ctx.device, image_view, nil)
+    }
+    delete(swapchain.image_views)
+    vk.DestroySwapchainKHR(ctx.device, swapchain.handle, nil)
+}
+
+@(private="file")
 Swapchain :: struct
 {
     handle: vk.SwapchainKHR,
@@ -1161,4 +1225,180 @@ compute_buf_offset_from_gpu_ptr :: proc(ptr: rawptr) -> (buf: vk.Buffer, offset:
     buf = alloc.buf_handle
     offset = u32(uintptr(ptr) - uintptr(alloc.device_address))
     return buf, offset, true
+}
+
+// Command buffers
+@(private="file")
+vk_acquire_cmd_buf :: proc(queue: vk.Queue) -> vk.CommandBuffer
+{
+    // Poll semaphores
+    found_free := -1
+    for _, i in ctx.cmd_bufs
+    {
+        if ctx.cmd_bufs_timelines[i].recording do continue
+
+        sem := ctx.cmd_bufs_timelines[i].sem
+        des_val := ctx.cmd_bufs_timelines[i].val
+        val: u64
+        vk.GetSemaphoreCounterValue(ctx.device, sem, &val)
+        if val >= des_val
+        {
+            found_free = i
+            ctx.cmd_bufs_timelines[i].recording = true
+            break
+        }
+    }
+
+    assert(found_free != -1)  // TODO
+
+    return ctx.cmd_bufs[found_free]
+}
+
+@(private="file")
+vk_submit_cmd_buf :: proc(queue: vk.Queue, cmd_buf: vk.CommandBuffer, signal_sem: vk.Semaphore = {}, signal_value: u64 = 0)
+{
+    // Find command buffer in array
+    found_idx := -1
+    for buf, i in ctx.cmd_bufs
+    {
+        if buf == cmd_buf
+        {
+            found_idx = i
+            break
+        }
+    }
+
+    assert(found_idx != -1)
+
+    ctx.cmd_bufs_timelines[found_idx].val += 1
+
+    cmd_buf_sem := ctx.cmd_bufs_timelines[found_idx].sem
+    cmd_buf_sem_value := ctx.cmd_bufs_timelines[found_idx].val
+
+    signal_sems: []vk.Semaphore = { cmd_buf_sem, signal_sem } if signal_sem != {} else { cmd_buf_sem }
+    signal_values: []u64 = { cmd_buf_sem_value, signal_value } if signal_sem != {} else { cmd_buf_sem_value }
+
+    next: rawptr
+    next = &vk.TimelineSemaphoreSubmitInfo {
+        sType = .TIMELINE_SEMAPHORE_SUBMIT_INFO,
+        pNext = next,
+        signalSemaphoreValueCount = u32(len(signal_values)),
+        pSignalSemaphoreValues = raw_data(signal_values)
+    }
+    to_submit := []vk.CommandBuffer { cmd_buf }
+    submit_info := vk.SubmitInfo {
+        sType = .SUBMIT_INFO,
+        pNext = next,
+        commandBufferCount = u32(len(to_submit)),
+        pCommandBuffers = raw_data(to_submit),
+        signalSemaphoreCount = u32(len(signal_sems)),
+        pSignalSemaphores = raw_data(signal_sems)
+    }
+    vk_check(vk.QueueSubmit(queue, 1, &submit_info, {}))
+
+    ctx.cmd_bufs_timelines[found_idx].recording = false
+}
+
+@(private="file")
+vk_get_cmd_buf_timeline :: proc(queue: vk.Queue, cmd_buf: vk.CommandBuffer) -> ^Timeline
+{
+    // Find command buffer in array
+    found_idx := -1
+    for buf, i in ctx.cmd_bufs
+    {
+        if buf == cmd_buf
+        {
+            found_idx = i
+            break
+        }
+    }
+
+    assert(found_idx != -1)
+    return &ctx.cmd_bufs_timelines[found_idx]
+}
+
+// Enum conversion
+
+@(private="file")
+to_vk_shader_stage :: #force_inline proc(type: Shader_Type) -> vk.ShaderStageFlags
+{
+    switch type
+    {
+        case .Vertex: return { .VERTEX }
+        case .Fragment: return { .FRAGMENT }
+    }
+
+    return {}
+}
+
+@(private="file")
+to_vk_stage :: #force_inline proc(stage: Stage) -> vk.PipelineStageFlags
+{
+    switch stage
+    {
+        case .Transfer: return { .TRANSFER }
+        case .Compute: return { .COMPUTE_SHADER }
+        case .Raster_Color_Out: return { .COLOR_ATTACHMENT_OUTPUT }
+        case .Fragment_Shader: return { .FRAGMENT_SHADER }
+        case .Vertex_Shader: return { .VERTEX_SHADER }
+        case .All: return { .ALL_COMMANDS }
+    }
+
+    return {}
+}
+
+@(private="file")
+to_vk_load_op :: #force_inline proc(load_op: Load_Op) -> vk.AttachmentLoadOp
+{
+    switch load_op
+    {
+        case .Clear: return .CLEAR
+        case .Load: return .LOAD
+        case .Dont_Care: return .DONT_CARE
+    }
+
+    return {}
+}
+
+@(private="file")
+to_vk_store_op :: #force_inline proc(store_op: Store_Op) -> vk.AttachmentStoreOp
+{
+    switch store_op
+    {
+        case .Store: return .STORE
+        case .Dont_Care: return .DONT_CARE
+    }
+
+    return {}
+}
+
+@(private="file")
+to_vk_compare_op :: #force_inline proc(compare_op: Compare_Op) -> vk.CompareOp
+{
+    switch compare_op
+    {
+        case .Never: return .NEVER
+        case .Less: return .LESS
+        case .Equal: return .EQUAL
+        case .Less_Equal: return .LESS_OR_EQUAL
+        case .Greater: return .GREATER
+        case .Not_Equal: return .NOT_EQUAL
+        case .Greater_Equal: return .GREATER_OR_EQUAL
+        case .Always: return .ALWAYS
+    }
+
+    return {}
+}
+
+@(private="file")
+to_vk_render_attachment :: #force_inline proc(attach: Render_Attachment) -> vk.RenderingAttachmentInfo
+{
+    return {
+        sType = .RENDERING_ATTACHMENT_INFO,
+        imageView = attach.view.handle,
+        imageLayout = .GENERAL,
+        loadOp = to_vk_load_op(attach.load_op),
+        storeOp = to_vk_store_op(attach.store_op),
+        clearValue = { color = { float32 = attach.clear_color } }
+    }
 }

@@ -1,9 +1,10 @@
 // raddbg 0.9.24 project file
 
 recent_file: path: "../gpu_compiler/main.odin"
-recent_file: path: "../../../Users/leona/Desktop/Odin/base/runtime/entry_windows.odin"
+recent_file: path: "../gpu_compiler/semantics.odin"
 recent_file: path: "../../../Users/leona/Desktop/Odin/base/runtime/core.odin"
 recent_file: path: "../gpu_compiler/codegen.odin"
+recent_file: path: "../../../Users/leona/Desktop/Odin/base/runtime/entry_windows.odin"
 recent_file: path: "../gpu_compiler/parser.odin"
 recent_file: path: "../../../Users/leona/Desktop/Odin/base/runtime/dynamic_map_internal.odin"
 recent_file: path: "../../../Users/leona/Desktop/Odin/base/runtime/core_builtin.odin"
@@ -33,7 +34,7 @@ target:
 debug_info:
 {
   path: "C:/work/no_gfx_api/build/gpu_compiler.pdb"
-  timestamp: 66201752629229
+  timestamp: 66201843891624
 }
 breakpoint:
 {
@@ -93,4 +94,16 @@ breakpoint:
 {
   source_location: "../gpu_compiler/main.odin:49:1"
   hit_count: 1
+}
+breakpoint:
+{
+  source_location: "../gpu_compiler/semantics.odin:78:1"
+  hit_count: 0
+  enabled: 0
+}
+breakpoint:
+{
+  source_location: "../gpu_compiler/semantics.odin:100:1"
+  hit_count: 0
+  enabled: 0
 }

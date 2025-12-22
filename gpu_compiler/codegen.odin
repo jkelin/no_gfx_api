@@ -25,11 +25,11 @@ codegen :: proc(ast: Ast, shader_type: Shader_Type)
 
     context.allocator = codegen_arena
 
-    for loc in ast.used_out_locations {
-        writefln("layout(location = %v) out _res_out_loc%v_;", loc, loc)
+    for loc, &type in ast.used_out_locations {
+        writefln("layout(location = %v) out %v _res_out_loc%v_;", loc, type_to_glsl(&type), loc)
     }
-    for loc in ast.used_in_locations {
-        writefln("layout(location = %v) in _res_in_loc%v_;", loc, loc)
+    for loc, &type in ast.used_in_locations {
+        writefln("layout(location = %v) in %v _res_in_loc%v_;", loc, type_to_glsl(&type), loc)
     }
 
     writeln("")
@@ -46,37 +46,7 @@ codegen :: proc(ast: Ast, shader_type: Shader_Type)
 
     writeln("")
 
-    writefln("layout(buffer_reference) readonly buffer _res_ptr_void {{ u32 _res_void_; }}")
-    for type in ast.used_types
-    {
-        if type.is_ptr {
-            writefln("layout(buffer_reference) readonly buffer _res_ptr_%v {{ %v _res_; }};", type.name, type.name)
-        } else if type.is_slice {
-            writefln("layout(buffer_reference) readonly buffer _res_slice_%v {{ %v _res_; }};", type.name, type.name)
-        }
-    }
-
-    writeln("")
-
-    writeln("layout(push_constant, std140) uniform Push")
-    writeln("{")
-    if writer_scope()
-    {
-        if shader_type == .Vertex {
-            writefln("_res_ptr_%v _res_data_;", ast.used_data_type)
-        } else {
-            writefln("_res_ptr_%v _res_vert_data_;", ast.used_data_type)
-        }
-
-        if shader_type == .Fragment {
-            writefln("_res_ptr_%v _res_data_;", ast.used_data_type)
-        } else {
-            writefln("_res_ptr_%v _res_frag_data_;", ast.used_data_type)
-        }
-    }
-    writeln("}")
-    writeln("")
-
+    // Generate all structs (can't forward declare structs in GLSL)
     for declaration in ast.scope.decls
     {
         switch decl in declaration.derived_decl
@@ -95,13 +65,59 @@ codegen :: proc(ast: Ast, shader_type: Shader_Type)
                 writeln("};")
                 writeln("")
             }
+            case ^Ast_Proc_Decl: {}
+            case:
+            {
+                fmt.println("Error!")
+            }
+        }
+    }
+
+    writefln("layout(buffer_reference) readonly buffer _res_ptr_void {{ uint _res_void_; }};")
+    for type in ast.used_types
+    {
+        if type.is_ptr {
+            writefln("layout(buffer_reference) readonly buffer _res_ptr_%v {{ %v _res_; }};", type.name, type.name)
+        } else if type.is_slice {
+            writefln("layout(buffer_reference) readonly buffer _res_slice_%v {{ %v _res_; }};", type.name, type.name)
+        }
+    }
+
+    writeln("")
+
+    data_type := ast.used_data_type if ast.used_data_type != "" else "void"
+
+    writeln("layout(push_constant, std140) uniform Push")
+    writeln("{")
+    if writer_scope()
+    {
+        if shader_type == .Vertex {
+            writefln("_res_ptr_%v _res_data_;", data_type)
+        } else {
+            writefln("_res_ptr_%v _res_vert_data_;", data_type)
+        }
+
+        if shader_type == .Fragment {
+            writefln("_res_ptr_%v _res_data_;", data_type)
+        } else {
+            writefln("_res_ptr_%v _res_frag_data_;", data_type)
+        }
+    }
+    writeln("};")
+    writeln("")
+
+    for declaration in ast.scope.decls
+    {
+        switch decl in declaration.derived_decl
+        {
+            case ^Ast_Struct_Decl: {}
             case ^Ast_Proc_Decl:
             {
                 is_main := decl.name == "main"
 
                 write_begin("")
                 ret_type_glsl := "void" if is_main else type_to_glsl(decl.return_type)
-                writef("%v %v(", type_to_glsl(decl.return_type), decl.name)
+                writef("%v %v(", ret_type_glsl, decl.name)
                 for arg, i in decl.args
                 {
                     if arg.attr != nil do continue
@@ -164,23 +180,51 @@ codegen_statement :: proc(statement: ^Ast_Statement, ast: Ast, proc_def: ^Ast_Pr
         {
             if is_main
             {
+                if stmt.expr.type.struct_decl != nil
+                {
+                    //struct_decl
+                }
+                else
+                {
+
+                }
+
                 #partial switch expr in stmt.expr.derived_expr
                 {
                     case ^Ast_Ident_Expr:
                     {
-                        info, ok := search_name(ast, proc_def, expr.token.text, expr.token)
+
+                        /*
+                        info, ok := search_name(c, expr.token.text, expr.token)
                         if ok
                         {
                             if info.is_primitive
                             {
-                                writef("%v = ", attribute_to_glsl(info.attr.?))
-                                codegen_expr(stmt.expr)
+                                if proc_def.return_attr != nil
+                                {
+                                    writef("%v = ", attribute_to_glsl(proc_def.return_attr.?))
+                                    codegen_expr(stmt.expr)
+                                }
+                            }
+                            else if info.struct_decl != nil
+                            {
+                                for field in info.struct_decl.fields
+                                {
+                                    if field.attr == nil do continue
+
+                                    writef("%v = %v.%v; ", attribute_to_glsl(field.attr.?), expr.token.text, field.name)
+                                }
+                            }
+                            else if info.proc_decl != nil
+                            {
+                                panic("Not implemented!")
                             }
                         }
                         else
                         {
                             panic("Not implemented!")
                         }
+                        */
                     }
                     case:
                     {
@@ -229,7 +273,11 @@ codegen_expr :: proc(expression: ^Ast_Expr)
         case ^Ast_Member_Access:
         {
             codegen_expr(expr.target)
-            writef(".%v", expr.member_name)
+            if expr.type.is_ptr || expr.type.is_slice {
+                writef("._res_.%v", expr.member_name)
+            } else {
+                writef(".%v", expr.member_name)
+            }
         }
         case ^Ast_Array_Access:
         {
@@ -252,73 +300,6 @@ codegen_expr :: proc(expression: ^Ast_Expr)
             write(")")
         }
     }
-}
-
-// TODO: Very prototype-y.
-search_type_name_of_name :: proc(proc_def: ^Ast_Proc_Decl, name: string, pos: Token) -> (string, Maybe(Ast_Attribute), bool)
-{
-    for arg in proc_def.args
-    {
-        if arg.name == name {
-            return arg.type.name, arg.attr, true
-        }
-    }
-
-    for statement in proc_def.statements
-    {
-        if raw_data(statement.token.text) > raw_data(pos.text) {
-            break
-        }
-
-        decl, ok := statement.derived_statement.(^Ast_Var_Decl)
-        if ok && decl.name == name {
-            return decl.type.name, nil, true
-        }
-    }
-
-    return {}, {}, false
-}
-
-Type_Lookup :: struct
-{
-    is_primitive: bool,
-    name: string,
-    decl: ^Ast_Struct_Decl,  // If not primitive
-    attr: Maybe(Ast_Attribute)
-}
-
-search_name :: proc(ast: Ast, proc_def: ^Ast_Proc_Decl, name: string, pos: Token) -> (res: Type_Lookup, ok: bool)
-{
-    type_name, attr, ok_s := search_type_name_of_name(proc_def, name, pos)
-    if !ok_s
-    {
-        fmt.printfln("Error: Could not find variable '%v'.", name)
-        return {}, false
-    }
-
-    switch type_name
-    {
-        case "float": return { true, type_name, nil, attr }, true
-        case "uint":  return { true, type_name, nil, attr }, true
-        case "vec2":  return { true, type_name, nil, attr }, true
-        case "vec3":  return { true, type_name, nil, attr }, true
-        case "vec4":  return { true, type_name, nil, attr }, true
-    }
-
-    for decl in ast.scope.decls
-    {
-        #partial switch d in decl.derived_decl
-        {
-            case ^Ast_Struct_Decl:
-            {
-                if decl.name == type_name {
-                    return { false, type_name, d, nil }, true
-                }
-            }
-        }
-    }
-
-    return {}, false
 }
 
 type_to_glsl :: proc(type: ^Ast_Type) -> string
@@ -367,16 +348,19 @@ writer_scope :: proc() -> bool
     return true
 }
 
+@(private="file")
 writer_scope_begin :: proc()
 {
     writer.indentation += 1
 }
 
+@(private="file")
 writer_scope_end :: proc()
 {
     writer.indentation -= 1
 }
 
+@(private="file")
 write_preamble :: proc()
 {
     writeln("#version 460")
@@ -385,34 +369,40 @@ write_preamble :: proc()
     writeln("")
 }
 
+@(private="file")
 writefln :: proc(fmt_str: string, args: ..any)
 {
     write_indentation()
     fmt.printfln(fmt_str, ..args)
 }
 
+@(private="file")
 writef :: proc(fmt_str: string, args: ..any)
 {
     fmt.printf(fmt_str, ..args)
 }
 
+@(private="file")
 writeln :: proc(strings: ..any)
 {
     write_indentation()
     fmt.println(..strings)
 }
 
+@(private="file")
 write_begin :: proc(strings: ..any)
 {
     write_indentation()
     fmt.print(..strings)
 }
 
+@(private="file")
 write :: proc(strings: ..any)
 {
     fmt.print(..strings)
 }
 
+@(private="file")
 write_indentation :: proc()
 {
     for i in 0..<4*writer.indentation {

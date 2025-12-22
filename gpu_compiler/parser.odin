@@ -18,8 +18,8 @@ Any_Node :: union
 Ast :: struct
 {
     used_types: map[Ast_Type]struct{},
-    used_in_locations: map[u32]struct{},
-    used_out_locations: map[u32]struct{},
+    used_in_locations: map[u32]Ast_Type,
+    used_out_locations: map[u32]Ast_Type,
     used_data_type: string,
     scope: ^Ast_Scope,
 }
@@ -90,6 +90,7 @@ Ast_Expr :: struct
 {
     using base: Ast_Node,
     derived_expr: Any_Expr,
+    type: ^Ast_Type,
 }
 
 Ast_Attribute_Type :: enum
@@ -200,20 +201,13 @@ Ast_Return :: struct
 
 // Types
 
-Type_Kind :: enum
-{
-    Unknown,
-    F32,
-    Vec3,
-    Vec4
-}
-
 Ast_Type :: struct
 {
     is_ptr: bool,
     is_slice: bool,
     name: string,
-    kind: Type_Kind,
+    struct_decl: ^Ast_Struct_Decl,  // Can be nil
+    attr: Maybe(Ast_Attribute)
 }
 
 parse_file :: proc(filename: string, tokens: []Token, allocator: runtime.Allocator) -> (Ast, bool)
@@ -236,8 +230,8 @@ Parser :: struct
     error: bool,
     cur_scope: ^Ast_Scope,
     used_types: map[Ast_Type]struct{},
-    used_out_locations: map[u32]struct{},
-    used_in_locations: map[u32]struct{},
+    used_out_locations: map[u32]Ast_Type,
+    used_in_locations: map[u32]Ast_Type,
     used_data_type: string,
 }
 
@@ -326,6 +320,14 @@ parse_proc_def :: proc(using p: ^Parser) -> ^Ast_Decl
         node.return_type = parse_type(p)
         if tokens[at].type == .Attribute {
             node.return_attr = parse_attribute(p)
+            if node.return_attr != nil
+            {
+                if node.return_attr.?.type == .In_Loc {
+                    used_in_locations[node.return_attr.?.arg] = node.return_type^
+                } else if node.return_attr.?.type == .Out_Loc {
+                    used_out_locations[node.return_attr.?.arg] = node.return_type^
+                }
+            }
         }
     }
 
@@ -527,8 +529,17 @@ parse_decl_list_elem :: proc(using p: ^Parser) -> ^Ast_Decl_Arg
 
     node.type = parse_type(p)
     node.attr = parse_attribute(p)
-    if node.attr != nil && node.attr.?.type == .Data {
-        used_data_type = node.type.name
+    if node.attr != nil
+    {
+        if node.attr.?.type == .Data {
+            used_data_type = node.type.name
+        }
+
+        if node.attr.?.type == .In_Loc {
+            used_in_locations[node.attr.?.arg] = node.type^
+        } else if node.attr.?.type == .Out_Loc {
+            used_out_locations[node.attr.?.arg] = node.type^
+        }
     }
 
     return node
@@ -594,9 +605,6 @@ parse_attribute :: proc(using p: ^Parser) -> Maybe(Ast_Attribute)
             if !ok do parse_error_on_token(p, num_token, "Expecting integer value on attribute arguments.")
             attr.arg = u32(val)
             required_token(p, .RParen)
-
-            // Add it to the location set
-            used_in_locations[attr.arg] = {}
         }
         case "out_loc":
         {
@@ -608,9 +616,6 @@ parse_attribute :: proc(using p: ^Parser) -> Maybe(Ast_Attribute)
             if !ok do parse_error_on_token(p, num_token, "Expecting integer value on attribute arguments.")
             attr.arg = u32(val)
             required_token(p, .RParen)
-
-            // Add it to the location set
-            used_out_locations[attr.arg] = {}
         }
         case:
         {

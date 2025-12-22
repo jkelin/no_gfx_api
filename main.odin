@@ -29,7 +29,7 @@ main :: proc()
         .HIGH_PIXEL_DENSITY,
         .VULKAN,
     }
-    window := sdl.CreateWindow("Lightmapper RT Example", Window_Size_X, Window_Size_Y, window_flags)
+    window := sdl.CreateWindow("no_gfx_api Example", Window_Size_X, Window_Size_Y, window_flags)
     ensure(window != nil)
 
     gpu.init(window)
@@ -37,6 +37,10 @@ main :: proc()
 
     vert_shader := gpu.shader_create(#load("shaders/test.vert.spv", []u32), .Vertex)
     frag_shader := gpu.shader_create(#load("shaders/test.frag.spv", []u32), .Fragment)
+    defer {
+        gpu.shader_destroy(&vert_shader)
+        gpu.shader_destroy(&frag_shader)
+    }
 
     Vertex :: struct { pos: [4]f32, color: [4]f32 }
 
@@ -58,6 +62,10 @@ main :: proc()
 
     verts_local := gpu.mem_alloc_typed_gpu(Vertex, 3)
     indices_local := gpu.mem_alloc_typed_gpu(u32, 3)
+    defer {
+        gpu.mem_free(verts_local)
+        gpu.mem_free(indices_local)
+    }
 
     queue := gpu.get_queue()
 
@@ -78,12 +86,17 @@ main :: proc()
     {
         proceed := handle_window_events(window)
         if !proceed do break
+        if .MINIMIZED in sdl.GetWindowFlags(window)
+        {
+            sdl.Delay(16)
+            continue
+        }
 
         last_ts := now_ts
         now_ts = sdl.GetPerformanceCounter()
         delta_time := min(max_delta_time, f32(f64((now_ts - last_ts)*1000) / f64(ts_freq)) / 1000.0)
 
-        swapchain := gpu.swapchain_acquire_next()
+        swapchain := gpu.swapchain_acquire_next()  // Blocks CPU until at least one frame is available.
 
         cmd_buf := gpu.commands_begin(queue)
         gpu.cmd_begin_render_pass(cmd_buf, {
@@ -92,8 +105,6 @@ main :: proc()
             }
         })
         gpu.cmd_set_shaders(cmd_buf, vert_shader, frag_shader)
-        gpu.cmd_set_depth_state(cmd_buf, {})
-        gpu.cmd_set_blend_state(cmd_buf, {})
         Vert_Data :: struct {
             verts: rawptr,
         }
@@ -109,6 +120,8 @@ main :: proc()
 
         gpu.arena_free_all(&frame_arena)
     }
+
+    gpu.wait_idle()
 }
 
 handle_window_events :: proc(window: ^sdl.Window) -> (proceed: bool)
