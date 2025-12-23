@@ -1,7 +1,7 @@
 
 # "No Graphics API" Prototype
 
-I was feeling incredibly inspired by Sebastian Aaltonen's ["No Graphics API"](https://www.sebastianaaltonen.com/blog/no-graphics-api) blog post, so I started to implement the proposed API on top Vulkan (except I also got rid of PSOs completely), to see how much of it is possible. It is still a proof of concept but there's a working example in this repository. The main thing that is missing right are textures, looking forward to implementing them.
+I was feeling incredibly inspired by Sebastian Aaltonen's ["No Graphics API"](https://www.sebastianaaltonen.com/blog/no-graphics-api) blog post, so I started to implement the proposed API on top Vulkan (except I also got rid of PSOs completely), to see how much of it is possible. It is still a proof of concept but there's a working example in this repository. The main thing that is missing right now are textures, looking forward to implementing them.
 
 ## API Usage
 The API is straight-forward to use:
