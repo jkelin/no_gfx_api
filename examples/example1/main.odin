@@ -11,7 +11,6 @@ import sdl "vendor:sdl3"
 
 Window_Size_X :: 1000
 Window_Size_Y :: 1000
-Frames_In_Flight :: 2
 
 main :: proc()
 {
@@ -29,7 +28,7 @@ main :: proc()
         .HIGH_PIXEL_DENSITY,
         .VULKAN,
     }
-    window := sdl.CreateWindow("no_gfx_api Example", Window_Size_X, Window_Size_Y, window_flags)
+    window := sdl.CreateWindow("no_gfx_api Example 1", Window_Size_X, Window_Size_Y, window_flags)
     ensure(window != nil)
 
     gpu.init(window)
