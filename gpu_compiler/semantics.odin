@@ -93,6 +93,14 @@ typecheck_expr :: proc(using c: ^Checker, expression: ^Ast_Expr)
         case ^Ast_Member_Access:
         {
             typecheck_expr(c, expr.target)
+
+            if expr.member_name == "xyz" {
+                type := new(Ast_Type)
+                type.name = "vec3"
+                expr.type = type
+                break
+            }
+
             if expr.target.type.struct_decl == nil do panic("Can't access member on this type")
 
             struct_decl := expr.target.type.struct_decl
@@ -112,9 +120,8 @@ typecheck_expr :: proc(using c: ^Checker, expression: ^Ast_Expr)
 
             type_resolved, ok := search_type(c, type.name)
             if !ok do panic("Type not found")
-            expr.type = type_resolved
-            expr.type.is_ptr = type.is_ptr
-            expr.type.is_slice = type.is_slice
+            expr.type = type
+            expr.type.struct_decl = type_resolved.struct_decl
         }
         case ^Ast_Array_Access:
         {
@@ -131,6 +138,10 @@ typecheck_expr :: proc(using c: ^Checker, expression: ^Ast_Expr)
             target, is_ident := expr.target.derived_expr.(^Ast_Ident_Expr)
             if !is_ident do panic("Not implemented!")
             if !is_primitive_type(target.token.text) do panic("Not implemented!")
+
+            for arg in expr.args {
+                typecheck_expr(c, arg)
+            }
 
             expr.type = new(Ast_Type)
             expr.type^ = {

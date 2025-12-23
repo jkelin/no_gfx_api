@@ -2,9 +2,10 @@
 
 recent_file: path: "../gpu_compiler/main.odin"
 recent_file: path: "../gpu_compiler/semantics.odin"
-recent_file: path: "../../../Users/leona/Desktop/Odin/base/runtime/core.odin"
 recent_file: path: "../gpu_compiler/codegen.odin"
 recent_file: path: "../../../Users/leona/Desktop/Odin/base/runtime/entry_windows.odin"
+recent_file: path: "D:/a/_work/1/s/src/vctools/crt/vcstartup/src/startup/exe_common.inl"
+recent_file: path: "../../../Users/leona/Desktop/Odin/base/runtime/core.odin"
 recent_file: path: "../gpu_compiler/parser.odin"
 recent_file: path: "../../../Users/leona/Desktop/Odin/base/runtime/dynamic_map_internal.odin"
 recent_file: path: "../../../Users/leona/Desktop/Odin/base/runtime/core_builtin.odin"
@@ -13,28 +14,25 @@ recent_file: path: "../../../Users/leona/Desktop/Odin/core/mem/virtual/arena.odi
 recent_file: path: "../../../Users/leona/Desktop/Odin/core/sync/primitives.odin"
 recent_file: path: "../../../Users/leona/Desktop/Odin/core/sync/primitives_windows.odin"
 recent_file: path: "../../../Users/leona/Desktop/Odin/base/runtime/error_checks.odin"
-recent_file: path: "D:/a/_work/1/s/src/vctools/crt/vcstartup/src/startup/exe_common.inl"
 recent_file: path: "../gpu_compiler/lexer.odin"
 target:
 {
   executable: "gpu_compiler.exe"
-  working_directory: ""
   enabled: 1
-  arguments: "../shaders/test.vert.musl"
-  entry_point: "main::main"
+  arguments: "../shaders/t.vert.musl"
+  working_directory: "../build"
 }
 target:
 {
   executable: "gpu_compiler.exe"
-  working_directory: ""
+  working_directory: "../build"
   enabled: 0
-  arguments: "../shaders/test.frag.musl"
-  entry_point: "main::main"
+  arguments: "../shaders/t.frag.musl"
 }
 debug_info:
 {
   path: "C:/work/no_gfx_api/build/gpu_compiler.pdb"
-  timestamp: 66201843891624
+  timestamp: 66201847911744
 }
 breakpoint:
 {
@@ -93,17 +91,25 @@ breakpoint:
 breakpoint:
 {
   source_location: "../gpu_compiler/main.odin:49:1"
+  hit_count: 0
+}
+breakpoint:
+{
+  source_location: "../gpu_compiler/main.odin:12:1"
   hit_count: 1
 }
 breakpoint:
 {
-  source_location: "../gpu_compiler/semantics.odin:78:1"
+  address_location: "main::typecheck_expr"
   hit_count: 0
-  enabled: 0
 }
 breakpoint:
 {
-  source_location: "../gpu_compiler/semantics.odin:100:1"
+  source_location: "../gpu_compiler/semantics.odin:95:1"
   hit_count: 0
-  enabled: 0
+}
+breakpoint:
+{
+  source_location: "../gpu_compiler/semantics.odin:98:1"
+  hit_count: 0
 }

@@ -13,13 +13,13 @@ Data :: struct
 Output :: struct
 {
     pos: vec4 @position,
-    color: vec3 @out_loc(0),
+    color: vec4 @out_loc(0),
 }
 
 main :: (vert_id: uint @vert_id, data: ^Data @data) -> Output
 {
     vert_out: Output;
-    vert_out.pos = data.verts[vert_id].pos;
-    vert_out.color = vec3(1.0, 0.0, 0.0);
+    vert_out.pos = vec4(data.verts[vert_id].pos.xyz, 1.0);
+    vert_out.color = data.verts[vert_id].color;
     return vert_out;
 }

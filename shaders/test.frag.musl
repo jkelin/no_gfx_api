@@ -1,5 +1,5 @@
 
-main :: (color: vec3 @in_loc(0)) -> vec4 @out_loc(0)
+main :: (color: vec4 @in_loc(0)) -> vec4 @out_loc(0)
 {
-    return vec4(color, 1.0);
+    return color;
 }

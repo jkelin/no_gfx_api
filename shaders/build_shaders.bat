@@ -1,9 +1,14 @@
 @echo off
 setlocal
 
-set flags=
+set glsl_flags=
+
+for %%f in (*.musl) do (
+   ..\build\gpu_compiler.exe "%%f"
+   echo %%f
+)
 
 for %%f in (*.glsl) do (
-    glslangvalidator %flags% -V "%%f" -o "%%~nf.spv"
+    glslangvalidator %glsl_flags% -V "%%f" -o "%%~nf.spv"
 )
 

@@ -6,6 +6,7 @@ import vmem "core:mem/virtual"
 import "core:mem"
 import "core:strings"
 import "base:runtime"
+import "core:os/os2"
 
 Shader_Type :: enum
 {
@@ -13,7 +14,7 @@ Shader_Type :: enum
     Fragment
 }
 
-codegen :: proc(ast: Ast, shader_type: Shader_Type)
+codegen :: proc(ast: Ast, shader_type: Shader_Type, input_path: string, output_path: string)
 {
     write_preamble()
 
@@ -73,13 +74,13 @@ codegen :: proc(ast: Ast, shader_type: Shader_Type)
         }
     }
 
-    writefln("layout(buffer_reference) readonly buffer _res_ptr_void {{ uint _res_void_; }};")
+    writefln("layout(buffer_reference, std140) readonly buffer _res_ptr_void {{ uint _res_void_; }};")
     for type in ast.used_types
     {
         if type.is_ptr {
-            writefln("layout(buffer_reference) readonly buffer _res_ptr_%v {{ %v _res_; }};", type.name, type.name)
+            writefln("layout(buffer_reference, std140) readonly buffer _res_ptr_%v {{ %v _res_; }};", type.name, type.name)
         } else if type.is_slice {
-            writefln("layout(buffer_reference) readonly buffer _res_slice_%v {{ %v _res_; }};", type.name, type.name)
+            writefln("layout(buffer_reference, std140) readonly buffer _res_slice_%v {{ %v _res_; }};", type.name, type.name)
         }
     }
 
@@ -151,6 +152,8 @@ codegen :: proc(ast: Ast, shader_type: Shader_Type)
             }
         }
     }
+
+    writer_output_to_file(output_path)
 }
 
 codegen_statement :: proc(statement: ^Ast_Statement, ast: Ast, proc_def: ^Ast_Proc_Decl)
@@ -182,62 +185,26 @@ codegen_statement :: proc(statement: ^Ast_Statement, ast: Ast, proc_def: ^Ast_Pr
             {
                 if stmt.expr.type.struct_decl != nil
                 {
-                    //struct_decl
+                    struct_decl := stmt.expr.type.struct_decl
+                    for field in struct_decl.fields
+                    {
+                        if field.attr == nil do continue
+                        writef("%v = ", attribute_to_glsl(field.attr.?))
+                        codegen_expr(stmt.expr)
+                        writef(".%v; ", field.name)
+                    }
                 }
                 else
                 {
-
-                }
-
-                #partial switch expr in stmt.expr.derived_expr
-                {
-                    case ^Ast_Ident_Expr:
+                    ret_attr_unpacked, ok := ret_attr.?
+                    if ok && ret_attr_unpacked.type == .Out_Loc
                     {
-
-                        /*
-                        info, ok := search_name(c, expr.token.text, expr.token)
-                        if ok
-                        {
-                            if info.is_primitive
-                            {
-                                if proc_def.return_attr != nil
-                                {
-                                    writef("%v = ", attribute_to_glsl(proc_def.return_attr.?))
-                                    codegen_expr(stmt.expr)
-                                }
-                            }
-                            else if info.struct_decl != nil
-                            {
-                                for field in info.struct_decl.fields
-                                {
-                                    if field.attr == nil do continue
-
-                                    writef("%v = %v.%v; ", attribute_to_glsl(field.attr.?), expr.token.text, field.name)
-                                }
-                            }
-                            else if info.proc_decl != nil
-                            {
-                                panic("Not implemented!")
-                            }
-                        }
-                        else
-                        {
-                            panic("Not implemented!")
-                        }
-                        */
+                        writef("%v = ", attribute_to_glsl(ret_attr_unpacked))
+                        codegen_expr(stmt.expr)
                     }
-                    case:
+                    else
                     {
-                        ret_attr_unpacked, ok := ret_attr.?
-                        if ok && ret_attr_unpacked.type == .Out_Loc
-                        {
-                            write("_res_out_loc0_ = ")
-                            codegen_expr(stmt.expr)
-                        }
-                        else
-                        {
-                            panic("Not implemented!")
-                        }
+                        panic("Not implemented!")
                     }
                 }
             }
@@ -284,7 +251,7 @@ codegen_expr :: proc(expression: ^Ast_Expr)
             codegen_expr(expr.target)
             write("[")
             codegen_expr(expr.idx_expr)
-            write("]")
+            write("]._res_")
         }
         case ^Ast_Call:
         {
@@ -336,6 +303,7 @@ attribute_to_glsl :: proc(attribute: Ast_Attribute) -> string
 Writer :: struct
 {
     indentation: u32,
+    builder: strings.Builder,
 }
 
 @(private="file")
@@ -373,39 +341,46 @@ write_preamble :: proc()
 writefln :: proc(fmt_str: string, args: ..any)
 {
     write_indentation()
-    fmt.printfln(fmt_str, ..args)
+    fmt.sbprintfln(&writer.builder, fmt_str, ..args)
 }
 
 @(private="file")
 writef :: proc(fmt_str: string, args: ..any)
 {
-    fmt.printf(fmt_str, ..args)
+    fmt.sbprintf(&writer.builder, fmt_str, ..args)
 }
 
 @(private="file")
 writeln :: proc(strings: ..any)
 {
     write_indentation()
-    fmt.println(..strings)
+    fmt.sbprintln(&writer.builder, ..strings)
 }
 
 @(private="file")
 write_begin :: proc(strings: ..any)
 {
     write_indentation()
-    fmt.print(..strings)
+    fmt.sbprint(&writer.builder, ..strings)
 }
 
 @(private="file")
 write :: proc(strings: ..any)
 {
-    fmt.print(..strings)
+    fmt.sbprint(&writer.builder, ..strings)
 }
 
 @(private="file")
 write_indentation :: proc()
 {
     for i in 0..<4*writer.indentation {
-        fmt.print(" ")
+        fmt.sbprint(&writer.builder, " ")
     }
+}
+
+@(private="file")
+writer_output_to_file :: proc(path: string)
+{
+    err := os2.write_entire_file_from_string(path, strings.to_string(writer.builder))
+    ensure(err == nil)
 }
