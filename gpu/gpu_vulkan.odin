@@ -978,7 +978,7 @@ _cmd_draw_indexed_instanced :: proc(cmd_buf: Command_Buffer, vertex_data: rawptr
 vk_check :: proc(result: vk.Result, location := #caller_location)
 {
     if result != .SUCCESS {
-        fatal_error("Vulkan failure: %", result, location = location)
+        fatal_error("Vulkan failure: %v", result, location = location)
     }
 }
 
@@ -1005,10 +1005,10 @@ vk_debug_callback :: proc "system" (severity: vk.DebugUtilsMessageSeverityFlagsE
 fatal_error :: proc(fmt: string, args: ..any, location := #caller_location)
 {
     when ODIN_DEBUG {
-        log.fatal(fmt, args, location = location)
+        log.fatalf(fmt, ..args, location = location)
         runtime.panic("")
     } else {
-        log.panicf(fmt, args, location = location)
+        log.panicf(fmt, ..args, location = location)
     }
 }
 
