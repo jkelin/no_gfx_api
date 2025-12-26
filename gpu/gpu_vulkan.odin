@@ -104,7 +104,6 @@ _init :: proc(window: ^sdl.Window)
             instance_extensions[:count],
             {
                 vk.EXT_DEBUG_UTILS_EXTENSION_NAME,
-                vk.KHR_WIN32_SURFACE_EXTENSION_NAME,
             }
         }, allocator = scratch)
 
