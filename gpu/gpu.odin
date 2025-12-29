@@ -120,7 +120,7 @@ Blend_State :: struct
 // Procedures
 
 // Initialization and interaction with the OS. This is simpler than it would probably be, for brevity.
-init: proc(window: ^sdl.Window) : _init
+init: proc(window: ^sdl.Window, frames_in_flight: u32) : _init
 cleanup: proc() : _cleanup
 wait_idle: proc() : _wait_idle
 swapchain_acquire_next: proc() -> Texture_View : _swapchain_acquire_next  // Blocks CPU until at least one frame is available.

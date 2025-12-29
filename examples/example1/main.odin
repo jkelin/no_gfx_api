@@ -11,6 +11,7 @@ import sdl "vendor:sdl3"
 
 Window_Size_X :: 1000
 Window_Size_Y :: 1000
+Frames_In_Flight :: 3
 
 main :: proc()
 {
@@ -31,7 +32,7 @@ main :: proc()
     window := sdl.CreateWindow("no_gfx_api Example 1", Window_Size_X, Window_Size_Y, window_flags)
     ensure(window != nil)
 
-    gpu.init(window)
+    gpu.init(window, Frames_In_Flight)
     defer gpu.cleanup()
 
     vert_shader := gpu.shader_create(#load("../../shaders/test.vert.spv", []u32), .Vertex)
@@ -76,8 +77,9 @@ main :: proc()
 
     now_ts := sdl.GetPerformanceCounter()
 
-    frame_arena := gpu.arena_init(1024 * 1024)
-    defer gpu.arena_destroy(&frame_arena)
+    frame_arenas: [Frames_In_Flight]gpu.Arena
+    for &frame_arena in frame_arenas do frame_arena = gpu.arena_init(1024 * 1024)
+    defer for &frame_arena in frame_arenas do gpu.arena_destroy(&frame_arena)
     next_frame := u64(1)
     frame_sem := gpu.semaphore_create(0)
     defer gpu.semaphore_destroy(&frame_sem)
@@ -95,7 +97,16 @@ main :: proc()
         now_ts = sdl.GetPerformanceCounter()
         delta_time := min(max_delta_time, f32(f64((now_ts - last_ts)*1000) / f64(ts_freq)) / 1000.0)
 
+        if next_frame > Frames_In_Flight {
+            gpu.semaphore_wait(frame_sem, next_frame - Frames_In_Flight)
+        }
+
+        frame_arena := &frame_arenas[next_frame % Frames_In_Flight]
+
         swapchain := gpu.swapchain_acquire_next()  // Blocks CPU until at least one frame is available.
+
+        @(static) offset: f32
+        offset += delta_time * 0.1
 
         cmd_buf := gpu.commands_begin(queue)
         gpu.cmd_begin_render_pass(cmd_buf, {
@@ -107,7 +118,7 @@ main :: proc()
         Vert_Data :: struct {
             verts: rawptr,
         }
-        verts_data := gpu.arena_alloc(&frame_arena, Vert_Data)
+        verts_data := gpu.arena_alloc(frame_arena, Vert_Data)
         verts_data.cpu.verts = verts_local
 
         gpu.cmd_draw_indexed_instanced(cmd_buf, verts_data.gpu, nil, indices_local, 3, 1)
@@ -117,7 +128,7 @@ main :: proc()
         gpu.swapchain_present(queue, frame_sem, next_frame)
         next_frame += 1
 
-        gpu.arena_free_all(&frame_arena)
+        gpu.arena_free_all(frame_arena)
     }
 
     gpu.wait_idle()

@@ -74,7 +74,7 @@ ctx: Context
 @(private="file")
 vk_logger: log.Logger
 
-_init :: proc(window: ^sdl.Window)
+_init :: proc(window: ^sdl.Window, frames_in_flight: u32)
 {
     init_scratch_arenas()
 
@@ -313,7 +313,7 @@ _init :: proc(window: ^sdl.Window)
 
         win_width, win_height: i32
         assert(sdl.GetWindowSize(window, &win_width, &win_height))
-        ctx.swapchain = create_swapchain(u32(win_width), u32(win_height))
+        ctx.swapchain = create_swapchain(u32(win_width), u32(win_height), frames_in_flight)
     }
 
     // Tree init
@@ -1062,7 +1062,7 @@ release_scratch :: #force_inline proc(allocator: mem.Allocator, temp: vmem.Arena
 }
 
 @(private="file")
-create_swapchain :: proc(width: u32, height: u32) -> Swapchain
+create_swapchain :: proc(width: u32, height: u32, frames_in_flight: u32) -> Swapchain
 {
     scratch, _ := acquire_scratch()
 
@@ -1071,8 +1071,8 @@ create_swapchain :: proc(width: u32, height: u32) -> Swapchain
     surface_caps: vk.SurfaceCapabilitiesKHR
     vk_check(vk.GetPhysicalDeviceSurfaceCapabilitiesKHR(ctx.phys_device, ctx.surface, &surface_caps))
 
-    image_count := max(2, surface_caps.minImageCount)
-    if surface_caps.maxImageCount != 0 do image_count = min(image_count, surface_caps.maxImageCount)
+    image_count := max(max(2, surface_caps.minImageCount), frames_in_flight)
+    if surface_caps.maxImageCount != 0 do assert(image_count <= surface_caps.maxImageCount)
 
     surface_format_count: u32
     vk_check(vk.GetPhysicalDeviceSurfaceFormatsKHR(ctx.phys_device, ctx.surface, &surface_format_count, nil))
