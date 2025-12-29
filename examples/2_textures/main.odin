@@ -2,14 +2,12 @@
 
 package main
 
-//import log "core:log"
-//import "core:math"
-//import "core:math/linalg"
+import log "core:log"
 import "core:fmt"
 
-//import "../../gpu"
+import "../../gpu"
 
-//import sdl "vendor:sdl3"
+import sdl "vendor:sdl3"
 
 Window_Size_X :: 1000
 Window_Size_Y :: 1000
@@ -18,18 +16,14 @@ Example_Name :: "Textures"
 
 main :: proc()
 {
-    fmt.println("Not implemented!")
+    fmt.println("Work in Progress!")
 
-    /*
     ok_i := sdl.Init({ .VIDEO })
     assert(ok_i)
 
     console_logger := log.create_console_logger()
     defer log.destroy_console_logger(console_logger)
     context.logger = console_logger
-
-    ts_freq := sdl.GetPerformanceFrequency()
-    max_delta_time: f32 = 1.0 / 10.0  // 10fps
 
     window_flags :: sdl.WindowFlags {
         .HIGH_PIXEL_DENSITY,
@@ -73,6 +67,20 @@ main :: proc()
         gpu.mem_free(indices_local)
     }
 
+    tex_desc := gpu.Texture_Desc {
+        dimensions = { 100, 100, 1 },
+        mip_count = 1,
+        layer_count = 1,
+        sample_count = 1,
+        format = .RGBA8_Unorm,
+        usage = { .Sampled },
+    }
+    tex_size, tex_align := gpu.texture_size_and_align(tex_desc)
+    tex_ptr := gpu.mem_alloc(tex_size, tex_align, .GPU)
+    defer gpu.mem_free(tex_ptr)
+    texture := gpu.texture_create(tex_desc, tex_ptr)
+    defer gpu.texture_destroy(&texture)
+
     queue := gpu.get_queue()
 
     upload_cmd_buf := gpu.commands_begin(queue)
@@ -80,8 +88,6 @@ main :: proc()
     gpu.cmd_mem_copy(upload_cmd_buf, indices.gpu, indices_local, 3 * size_of(u32))
     gpu.cmd_barrier(upload_cmd_buf, .Transfer, .All, {})
     gpu.queue_submit(queue, { upload_cmd_buf })
-
-    now_ts := sdl.GetPerformanceCounter()
 
     frame_arenas: [Frames_In_Flight]gpu.Arena
     for &frame_arena in frame_arenas do frame_arena = gpu.arena_init(1024 * 1024)
@@ -99,10 +105,6 @@ main :: proc()
             continue
         }
 
-        last_ts := now_ts
-        now_ts = sdl.GetPerformanceCounter()
-        delta_time := min(max_delta_time, f32(f64((now_ts - last_ts)*1000) / f64(ts_freq)) / 1000.0)
-
         if next_frame > Frames_In_Flight {
             gpu.semaphore_wait(frame_sem, next_frame - Frames_In_Flight)
         }
@@ -114,7 +116,7 @@ main :: proc()
         cmd_buf := gpu.commands_begin(queue)
         gpu.cmd_begin_render_pass(cmd_buf, {
             color_attachments = {
-                { view = swapchain, clear_color = changing_color(delta_time) }
+                { view = swapchain, clear_color = { 0.7, 0.7, 0.7, 1.0 } }
             }
         })
         gpu.cmd_set_shaders(cmd_buf, vert_shader, frag_shader)
@@ -135,10 +137,8 @@ main :: proc()
     }
 
     gpu.wait_idle()
-    */
 }
 
-/*
 handle_window_events :: proc(window: ^sdl.Window) -> (proceed: bool)
 {
     event: sdl.Event
@@ -160,14 +160,3 @@ handle_window_events :: proc(window: ^sdl.Window) -> (proceed: bool)
 
     return
 }
-
-changing_color :: proc(delta_time: f32) -> [4]f32
-{
-    @(static) t: f32
-    t = math.mod(t + delta_time * 1.7, math.PI * 2)
-
-    color_a := [4]f32 { 0.2, 0.2, 0.2, 1.0 }
-    color_b := [4]f32 { 0.4, 0.4, 0.4, 1.0 }
-    return linalg.lerp(color_a, color_b, math.sin(t) * 0.5 + 0.5)
-}
-*/

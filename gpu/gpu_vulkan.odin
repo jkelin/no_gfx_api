@@ -528,8 +528,6 @@ _swapchain_present :: proc(queue: Queue, sem_wait: Semaphore, wait_value: u64)
 
 _mem_alloc :: proc(bytes: u64, align: u64 = 1, mem_type := Memory.Default) -> rawptr
 {
-    to_alloc := bytes + align - 1  // Allocate extra for alignment
-
     vma_usage: vma.Memory_Usage
     properties: vk.MemoryPropertyFlags
     switch mem_type
@@ -559,10 +557,18 @@ _mem_alloc :: proc(bytes: u64, align: u64 = 1, mem_type := Memory.Default) -> ra
     }
     buf_ci := vk.BufferCreateInfo {
         sType = .BUFFER_CREATE_INFO,
-        size = cast(vk.DeviceSize) to_alloc,
+        size = cast(vk.DeviceSize) bytes,
         usage = buf_usage,
         sharingMode = .EXCLUSIVE,
     }
+
+    buf: vk.Buffer
+    vk_check(vk.CreateBuffer(ctx.device, &buf_ci, nil, &buf))
+
+    mem_requirements: vk.MemoryRequirements
+    vk.GetBufferMemoryRequirements(ctx.device, buf, &mem_requirements)
+
+    mem_requirements.alignment = vk.DeviceSize(max(u64(mem_requirements.alignment), align))
 
     alloc_ci := vma.Allocation_Create_Info {
         flags = vma.Allocation_Create_Flags { .Mapped } if mem_type != .GPU else {},
@@ -571,8 +577,10 @@ _mem_alloc :: proc(bytes: u64, align: u64 = 1, mem_type := Memory.Default) -> ra
     }
     alloc: vma.Allocation
     alloc_info: vma.Allocation_Info
-    buf: vk.Buffer
-    vk_check(vma.create_buffer(ctx.vma_allocator, buf_ci, alloc_ci, &buf, &alloc, &alloc_info))
+    //vk_check(vma.create_buffer(ctx.vma_allocator, buf_ci, alloc_ci, &buf, &alloc, &alloc_info))
+    vk_check(vma.allocate_memory(ctx.vma_allocator, mem_requirements, alloc_ci, &alloc, &alloc_info))
+
+    vk_check(vma.bind_buffer_memory(ctx.vma_allocator, alloc, buf))
 
     info := vk.BufferDeviceAddressInfo {
         sType = .BUFFER_DEVICE_ADDRESS_INFO,
@@ -643,7 +651,6 @@ _host_to_device_ptr :: proc(ptr: rawptr) -> rawptr
 // Textures
 _texture_create :: proc(desc: Texture_Desc, storage: rawptr) -> Texture
 {
-    /*
     alloc_idx, ok_s := search_alloc_from_gpu_ptr(storage)
     if !ok_s
     {
@@ -652,12 +659,59 @@ _texture_create :: proc(desc: Texture_Desc, storage: rawptr) -> Texture
     }
     alloc := ctx.gpu_allocs[alloc_idx]
 
-    vma.create_aliasing_image2(ctx.vma_allocator)
-    */
-    return {}
+    image: vk.Image
+    offset := uintptr(storage) - uintptr(alloc.device_address)
+    vk_check(vma.create_aliasing_image2(ctx.vma_allocator, alloc.allocation, vk.DeviceSize(offset), {
+        sType = .IMAGE_CREATE_INFO,
+        imageType = to_vk_texture_type(desc.type),
+        format = to_vk_texture_format(desc.format),
+        extent = vk.Extent3D { desc.dimensions.x, desc.dimensions.y, desc.dimensions.z },
+        mipLevels = desc.mip_count,
+        arrayLayers = desc.layer_count,
+        samples = to_vk_sample_count(desc.sample_count),
+        usage = to_vk_texture_usage(desc.usage),
+        initialLayout = .UNDEFINED,
+    }, &image))
+
+    return {
+        dimensions = desc.dimensions,
+        format = desc.format,
+        handle = transmute(Texture_Handle) image
+    }
 }
 
-_texture_size_and_align :: proc(desc: Texture_Desc) -> (size: u64, align: u64) { return {}, {} }
+_texture_destroy :: proc(texture: ^Texture)
+{
+    vk_image := transmute(vk.Image) texture.handle
+    vk.DestroyImage(ctx.device, vk_image, nil)
+    texture^ = {}
+}
+
+_texture_size_and_align :: proc(desc: Texture_Desc) -> (size: u64, align: u64)
+{
+    // NOTE: Vulkan here is a huge PITA as always. Images created with the same create info
+    // can have different size and alignment according to the standard so this is technically not standard compliant.
+
+    image_ci := vk.ImageCreateInfo {
+        sType = .IMAGE_CREATE_INFO,
+        imageType = to_vk_texture_type(desc.type),
+        format = to_vk_texture_format(desc.format),
+        extent = vk.Extent3D { desc.dimensions.x, desc.dimensions.y, desc.dimensions.z },
+        mipLevels = desc.mip_count,
+        arrayLayers = desc.layer_count,
+        samples = to_vk_sample_count(desc.sample_count),
+        usage = to_vk_texture_usage(desc.usage),
+        initialLayout = .UNDEFINED,
+    }
+    tmp_image: vk.Image
+    vk_check(vk.CreateImage(ctx.device, &image_ci, nil, &tmp_image))
+    defer vk.DestroyImage(ctx.device, tmp_image, nil)
+
+    mem_requirements: vk.MemoryRequirements
+    vk.GetImageMemoryRequirements(ctx.device, tmp_image, &mem_requirements)
+    return u64(mem_requirements.size), u64(mem_requirements.alignment)
+}
+
 _texture_view_descriptor :: proc(texture: Texture, view_desc: Texture_View_Desc) -> [4]u64 { return {} }
 _texture_rw_view_descriptor :: proc(texture: Texture, view_desc: Texture_View_Desc) -> [4]u64 { return {} }
 
@@ -1337,7 +1391,6 @@ to_vk_shader_stage :: #force_inline proc(type: Shader_Type) -> vk.ShaderStageFla
         case .Vertex: return { .VERTEX }
         case .Fragment: return { .FRAGMENT }
     }
-
     return {}
 }
 
@@ -1353,7 +1406,6 @@ to_vk_stage :: #force_inline proc(stage: Stage) -> vk.PipelineStageFlags
         case .Vertex_Shader: return { .VERTEX_SHADER }
         case .All: return { .ALL_COMMANDS }
     }
-
     return {}
 }
 
@@ -1366,7 +1418,6 @@ to_vk_load_op :: #force_inline proc(load_op: Load_Op) -> vk.AttachmentLoadOp
         case .Load: return .LOAD
         case .Dont_Care: return .DONT_CARE
     }
-
     return {}
 }
 
@@ -1378,7 +1429,6 @@ to_vk_store_op :: #force_inline proc(store_op: Store_Op) -> vk.AttachmentStoreOp
         case .Store: return .STORE
         case .Dont_Care: return .DONT_CARE
     }
-
     return {}
 }
 
@@ -1396,7 +1446,6 @@ to_vk_compare_op :: #force_inline proc(compare_op: Compare_Op) -> vk.CompareOp
         case .Greater_Equal: return .GREATER_OR_EQUAL
         case .Always: return .ALWAYS
     }
-
     return {}
 }
 
@@ -1411,6 +1460,52 @@ to_vk_render_attachment :: #force_inline proc(attach: Render_Attachment) -> vk.R
         storeOp = to_vk_store_op(attach.store_op),
         clearValue = { color = { float32 = attach.clear_color } }
     }
+}
+
+@(private="file")
+to_vk_texture_type :: #force_inline proc(type: Texture_Type) -> vk.ImageType
+{
+    switch type
+    {
+        case .D2: return .D2
+        case .D3: return .D3
+        case .D1: return .D1
+    }
+    return {}
+}
+
+to_vk_texture_format :: proc(format: Texture_Format) -> vk.Format
+{
+    switch format
+    {
+        case .None: return .UNDEFINED
+        case .RGBA8_Unorm: return .R8G8B8A8_UNORM
+        case .D32_Float: return .D32_SFLOAT
+    }
+    return {}
+}
+
+to_vk_sample_count :: proc(sample_count: u32) -> vk.SampleCountFlags
+{
+    switch sample_count
+    {
+        case 1: return { ._1 }
+        case 2: return { ._2 }
+        case 4: return { ._4 }
+        case 8: return { ._8 }
+        case: panic("Unsupported sample count.")
+    }
+    return {}
+}
+
+to_vk_texture_usage :: proc(usage: Usage_Flags) -> vk.ImageUsageFlags
+{
+    res: vk.ImageUsageFlags
+    if .Sampled in usage do                  res += { .SAMPLED }
+    if .Storage in usage do                  res += { .STORAGE }
+    if .Color_Attachment in usage do         res += { .COLOR_ATTACHMENT }
+    if .Depth_Stencil_Attachment in usage do res += { .DEPTH_STENCIL_ATTACHMENT }
+    return res
 }
 
 @(private="file")

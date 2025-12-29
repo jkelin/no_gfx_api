@@ -20,8 +20,8 @@ Texture_View_Handle :: vk.ImageView  // @tmp
 
 // Enums
 Memory :: enum { Default = 0, GPU, Readback }
-Texture_Type :: enum { D2 = 0, D3, D1, Cube, D2_Array, Cube_Array }
-Texture_Format :: enum { None = 0, Rgba8_Unorm, D32_Float, Rg11B10_Float, Rgb10_A2_Unorm }
+Texture_Type :: enum { D2 = 0, D3, D1 }
+Texture_Format :: enum { None = 0, RGBA8_Unorm, D32_Float }
 Usage :: enum { Sampled = 0, Storage, Color_Attachment, Depth_Stencil_Attachment }
 Usage_Flags :: bit_set[Usage; u32]
 Shader_Type :: enum { Vertex = 0, Fragment }
@@ -84,10 +84,9 @@ Render_Pass_Desc :: struct
     stencil_attachment: Maybe(Render_Attachment),
 }
 
-Texture :: struct
+Texture :: struct #all_or_none
 {
-    width: u32,
-    height: u32,
+    dimensions: [3]u32,
     format: Texture_Format,
     handle: Texture_Handle
 }
@@ -132,8 +131,9 @@ mem_free: proc(ptr: rawptr, loc := #caller_location) : _mem_free
 host_to_device_ptr: proc(ptr: rawptr) -> rawptr : _host_to_device_ptr  // Only supports base allocation pointers, like mem_free!
 
 // Textures
-//texture_size_and_align: proc(desc: Texture_Desc) -> (size: u64, align: u64) : _texture_size_and_align
+texture_size_and_align: proc(desc: Texture_Desc) -> (size: u64, align: u64) : _texture_size_and_align
 texture_create: proc(desc: Texture_Desc, storage: rawptr) -> Texture : _texture_create
+texture_destroy: proc(texture: ^Texture) : _texture_destroy
 //texture_view_descriptor: proc(texture: Texture, view_desc: Texture_View_Desc) -> Texture_View : _texture_view_descriptor
 //texture_rw_view_descriptor: proc(texture: Texture, view_desc: Texture_View_Desc) -> [4]u64 : _texture_rw_view_descriptor
 
