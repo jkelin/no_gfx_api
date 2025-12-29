@@ -133,6 +133,7 @@ host_to_device_ptr: proc(ptr: rawptr) -> rawptr : _host_to_device_ptr  // Only s
 
 // Textures
 //texture_size_and_align: proc(desc: Texture_Desc) -> (size: u64, align: u64) : _texture_size_and_align
+texture_create: proc(desc: Texture_Desc, storage: rawptr) -> Texture : _texture_create
 //texture_view_descriptor: proc(texture: Texture, view_desc: Texture_View_Desc) -> Texture_View : _texture_view_descriptor
 //texture_rw_view_descriptor: proc(texture: Texture, view_desc: Texture_View_Desc) -> [4]u64 : _texture_rw_view_descriptor
 

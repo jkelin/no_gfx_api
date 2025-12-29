@@ -10,14 +10,15 @@ import rbt "core:container/rbtree"
 
 import sdl "vendor:sdl3"
 import vk "vendor:vulkan"
+import "vma"
 
 PUSH_CONSTANTS_SIZE :: size_of(rawptr) * 2
 
 @(private="file")
 GPU_Alloc_Meta :: struct #all_or_none
 {
-    mem_handle: vk.DeviceMemory,
     buf_handle: vk.Buffer,
+    allocation: vma.Allocation,
     device_address: vk.DeviceAddress,
     align: u32,
 }
@@ -43,6 +44,8 @@ Context :: struct
     instance: vk.Instance,
     debug_messenger: vk.DebugUtilsMessengerEXT,
     surface: vk.SurfaceKHR,
+
+    vma_allocator: vma.Allocator,
 
     gpu_allocs: [dynamic]GPU_Alloc_Meta,
     // TODO: freelist of gpu allocs
@@ -331,6 +334,18 @@ _init :: proc(window: ^sdl.Window, frames_in_flight: u32)
             return .Greater
         }
     })
+
+    // VMA allocator
+    vma_vulkan_procs := vma.create_vulkan_functions()
+    ok_vma := vma.create_allocator({
+        flags = { .Buffer_Device_Address },
+        instance = ctx.instance,
+        vulkan_api_version = 1003000,  // 1.3
+        physical_device = ctx.phys_device,
+        device = ctx.device,
+        vulkan_functions = &vma_vulkan_procs,
+    }, &ctx.vma_allocator)
+    assert(ok_vma == .SUCCESS)
 }
 
 _cleanup :: proc()
@@ -343,6 +358,8 @@ _cleanup :: proc()
     }
 
     vk.DestroyPipelineLayout(ctx.device, ctx.common_pipeline_layout, nil)
+
+    vma.destroy_allocator(ctx.vma_allocator)
 
     vk.DestroyDevice(ctx.device, nil)
 }
@@ -511,54 +528,60 @@ _mem_alloc :: proc(bytes: u64, align: u64 = 1, mem_type := Memory.Default) -> ra
 {
     to_alloc := bytes + align - 1  // Allocate extra for alignment
 
+    vma_usage: vma.Memory_Usage
     properties: vk.MemoryPropertyFlags
     switch mem_type
     {
-        case .Default: properties = { .HOST_VISIBLE, .HOST_COHERENT }
-        case .GPU: properties = { .DEVICE_LOCAL }
-        case .Readback: properties = { .HOST_VISIBLE, .HOST_CACHED }
+        case .Default:
+        {
+            properties = { .HOST_VISIBLE, .HOST_COHERENT }
+            vma_usage = .Cpu_To_Gpu
+        }
+        case .GPU:
+        {
+            properties = { .DEVICE_LOCAL }
+            vma_usage = .Gpu_Only
+        }
+        case .Readback:
+        {
+            properties = { .HOST_VISIBLE, .HOST_CACHED, .HOST_COHERENT }
+            vma_usage = .Gpu_To_Cpu
+        }
     }
 
+    buf_usage: vk.BufferUsageFlags
+    if mem_type == .GPU {
+        buf_usage = { .SHADER_DEVICE_ADDRESS, .INDEX_BUFFER, .STORAGE_BUFFER, .TRANSFER_DST }
+    } else {
+        buf_usage = { .SHADER_DEVICE_ADDRESS, .INDEX_BUFFER, .STORAGE_BUFFER, .TRANSFER_SRC }
+    }
     buf_ci := vk.BufferCreateInfo {
         sType = .BUFFER_CREATE_INFO,
         size = cast(vk.DeviceSize) to_alloc,
-        usage = { .SHADER_DEVICE_ADDRESS, .INDEX_BUFFER, .STORAGE_BUFFER, .TRANSFER_DST, .TRANSFER_SRC },
+        usage = buf_usage,
         sharingMode = .EXCLUSIVE,
     }
-    buffer: vk.Buffer
-    vk_check(vk.CreateBuffer(ctx.device, &buf_ci, nil, &buffer))
 
-    mem_requirements: vk.MemoryRequirements
-    vk.GetBufferMemoryRequirements(ctx.device, buffer, &mem_requirements)
-    assert(mem_requirements.size >= vk.DeviceSize(to_alloc))
-
-    next: rawptr
-    next = &vk.MemoryAllocateFlagsInfo {
-        sType = .MEMORY_ALLOCATE_FLAGS_INFO,
-        pNext = next,
-        flags = { .DEVICE_ADDRESS },
+    alloc_ci := vma.Allocation_Create_Info {
+        flags = vma.Allocation_Create_Flags { .Mapped } if mem_type != .GPU else {},
+        usage = vma_usage,
+        required_flags = properties,
     }
-    memory_ai := vk.MemoryAllocateInfo {
-        sType = .MEMORY_ALLOCATE_INFO,
-        pNext = next,
-        allocationSize = mem_requirements.size,
-        memoryTypeIndex = find_mem_type(ctx.phys_device, mem_requirements.memoryTypeBits, properties)
-    }
-    mem: vk.DeviceMemory
-    vk_check(vk.AllocateMemory(ctx.device, &memory_ai, nil, &mem))
-
-    vk_check(vk.BindBufferMemory(ctx.device, buffer, mem, 0))
+    alloc: vma.Allocation
+    alloc_info: vma.Allocation_Info
+    buf: vk.Buffer
+    vk_check(vma.create_buffer(ctx.vma_allocator, buf_ci, alloc_ci, &buf, &alloc, &alloc_info))
 
     info := vk.BufferDeviceAddressInfo {
         sType = .BUFFER_DEVICE_ADDRESS_INFO,
-        buffer = buffer
+        buffer = buf
     }
     addr := vk.GetBufferDeviceAddress(ctx.device, &info)
     addr_ptr := cast(rawptr) cast(uintptr) addr
 
     append(&ctx.gpu_allocs, GPU_Alloc_Meta {
-        mem_handle = mem,
-        buf_handle = buffer,
+        allocation = alloc,
+        buf_handle = buf,
         device_address = addr,
         align = u32(align),
     })
@@ -568,8 +591,7 @@ _mem_alloc :: proc(bytes: u64, align: u64 = 1, mem_type := Memory.Default) -> ra
 
     if mem_type != .GPU
     {
-        ptr: rawptr
-        vk_check(vk.MapMemory(ctx.device, mem, 0, vk.DeviceSize(to_alloc), {}, &ptr))
+        ptr := alloc_info.mapped_data
         ctx.cpu_ptr_to_alloc[ptr] = gpu_alloc_idx
         return ptr
     }
@@ -590,15 +612,13 @@ _mem_free :: proc(ptr: rawptr, loc := #caller_location)
     if cpu_found
     {
         meta := ctx.gpu_allocs[cpu_alloc]
-        vk.FreeMemory(ctx.device, meta.mem_handle, nil)
-        vk.DestroyBuffer(ctx.device, meta.buf_handle, nil)
+        vma.destroy_buffer(ctx.vma_allocator, meta.buf_handle, meta.allocation)
         delete_key(&ctx.cpu_ptr_to_alloc, ptr)
     }
     else if gpu_found
     {
         meta := ctx.gpu_allocs[gpu_alloc]
-        vk.FreeMemory(ctx.device, meta.mem_handle, nil)
-        vk.DestroyBuffer(ctx.device, meta.buf_handle, nil)
+        vma.destroy_buffer(ctx.vma_allocator, meta.buf_handle, meta.allocation)
         delete_key(&ctx.gpu_ptr_to_alloc, ptr)
     }
 }
@@ -619,6 +639,11 @@ _host_to_device_ptr :: proc(ptr: rawptr) -> rawptr
 }
 
 // Textures
+_texture_create :: proc(desc: Texture_Desc, storage: rawptr) -> Texture
+{
+    return {}
+}
+
 _texture_size_and_align :: proc(desc: Texture_Desc) -> (size: u64, align: u64) { return {}, {} }
 _texture_view_descriptor :: proc(texture: Texture, view_desc: Texture_View_Desc) -> [4]u64 { return {} }
 _texture_rw_view_descriptor :: proc(texture: Texture, view_desc: Texture_View_Desc) -> [4]u64 { return {} }

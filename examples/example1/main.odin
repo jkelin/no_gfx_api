@@ -12,6 +12,7 @@ import sdl "vendor:sdl3"
 Window_Size_X :: 1000
 Window_Size_Y :: 1000
 Frames_In_Flight :: 3
+Example_Name :: "Triangle"
 
 main :: proc()
 {
@@ -29,7 +30,7 @@ main :: proc()
         .HIGH_PIXEL_DENSITY,
         .VULKAN,
     }
-    window := sdl.CreateWindow("no_gfx_api Example 1", Window_Size_X, Window_Size_Y, window_flags)
+    window := sdl.CreateWindow(Example_Name, Window_Size_X, Window_Size_Y, window_flags)
     ensure(window != nil)
 
     gpu.init(window, Frames_In_Flight)
@@ -104,9 +105,6 @@ main :: proc()
         frame_arena := &frame_arenas[next_frame % Frames_In_Flight]
 
         swapchain := gpu.swapchain_acquire_next()  // Blocks CPU until at least one frame is available.
-
-        @(static) offset: f32
-        offset += delta_time * 0.1
 
         cmd_buf := gpu.commands_begin(queue)
         gpu.cmd_begin_render_pass(cmd_buf, {
