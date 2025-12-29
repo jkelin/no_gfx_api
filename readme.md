@@ -45,8 +45,9 @@ gpu.cmd_barrier(upload_cmd_buf, .Transfer, .All, {})
 gpu.queue_submit(queue, { upload_cmd_buf })
 
 // --- Frame resources
-frame_arena := gpu.arena_init(1024 * 1024)
-defer gpu.arena_destroy(&frame_arena)
+frame_arenas: [Frames_In_Flight]gpu.Arena
+for &frame_arena in frame_arenas do frame_arena = gpu.arena_init(1024 * 1024)
+defer for &frame_arena in frame_arenas do gpu.arena_destroy(&frame_arena)
 next_frame := u64(1)
 frame_sem := gpu.semaphore_create(0)
 defer gpu.semaphore_destroy(&frame_sem)
@@ -54,6 +55,11 @@ for true
 {
     proceed := handle_window_events(window)
     if !proceed do break
+
+    if next_frame > Frames_In_Flight {
+        gpu.semaphore_wait(frame_sem, next_frame - Frames_In_Flight)
+    }
+    frame_arena := &frame_arenas[next_frame % Frames_In_Flight]
 
     // --- Render frame
     swapchain := gpu.swapchain_acquire_next()  // Blocks CPU until at least one frame is available.
@@ -70,7 +76,7 @@ for true
         verts: rawptr,
         // Uniforms...
     }
-    verts_data := gpu.arena_alloc(&frame_arena, Vert_Data)
+    verts_data := gpu.arena_alloc(frame_arena, Vert_Data)
     verts_data.cpu.verts = verts_local
 
     // Just pass pointers to your data!
@@ -81,7 +87,7 @@ for true
     gpu.swapchain_present(queue, frame_sem, next_frame)
     next_frame += 1
 
-    gpu.arena_free_all(&frame_arena)
+    gpu.arena_free_all(frame_arena)
 }
 
 gpu.wait_idle()  // Wait until the end of execution for resource destruction
