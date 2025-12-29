@@ -17,6 +17,7 @@ Queue :: distinct Handle
 Semaphore :: distinct Handle
 Shader :: distinct Handle
 Texture_View_Handle :: vk.ImageView  // @tmp
+Texture_Descriptor :: struct { bytes: [4]u64 }
 
 // Enums
 Memory :: enum { Default = 0, GPU, Readback }

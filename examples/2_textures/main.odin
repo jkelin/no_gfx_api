@@ -1,5 +1,4 @@
 
-
 package main
 
 import log "core:log"
@@ -42,23 +41,30 @@ main :: proc()
         gpu.shader_destroy(&frag_shader)
     }
 
+    texture_desc_heap := gpu.mem_alloc_typed(gpu.Texture_Descriptor, 65536)
+    defer gpu.mem_free(raw_data(texture_desc_heap))
+
     Vertex :: struct { pos: [4]f32 }
 
     arena := gpu.arena_init(1024 * 1024)
     defer gpu.arena_destroy(&arena)
 
-    verts := gpu.arena_alloc_array(&arena, Vertex, 3)
+    verts := gpu.arena_alloc_array(&arena, Vertex, 4)
     verts.cpu[0].pos = { -0.5,  0.5, 0.0, 0.0 }
-    verts.cpu[1].pos = {  0.0, -0.5, 0.0, 0.0 }
+    verts.cpu[1].pos = {  0.5, -0.5, 0.0, 0.0 }
     verts.cpu[2].pos = {  0.5,  0.5, 0.0, 0.0 }
+    verts.cpu[3].pos = { -0.5, -0.5, 0.0, 0.0 }
 
-    indices := gpu.arena_alloc_array(&arena, u32, 3)
+    indices := gpu.arena_alloc_array(&arena, u32, 6)
     indices.cpu[0] = 0
     indices.cpu[1] = 1
     indices.cpu[2] = 2
+    indices.cpu[3] = 0
+    indices.cpu[4] = 1
+    indices.cpu[5] = 3
 
-    verts_local := gpu.mem_alloc_typed_gpu(Vertex, 3)
-    indices_local := gpu.mem_alloc_typed_gpu(u32, 3)
+    verts_local := gpu.mem_alloc_typed_gpu(Vertex, 4)
+    indices_local := gpu.mem_alloc_typed_gpu(u32, 6)
     defer {
         gpu.mem_free(verts_local)
         gpu.mem_free(indices_local)
@@ -81,8 +87,8 @@ main :: proc()
     queue := gpu.get_queue()
 
     upload_cmd_buf := gpu.commands_begin(queue)
-    gpu.cmd_mem_copy(upload_cmd_buf, verts.gpu, verts_local, 3 * size_of(Vertex))
-    gpu.cmd_mem_copy(upload_cmd_buf, indices.gpu, indices_local, 3 * size_of(u32))
+    gpu.cmd_mem_copy(upload_cmd_buf, verts.gpu, verts_local, u64(len(verts.cpu)) * size_of(verts.cpu[0]))
+    gpu.cmd_mem_copy(upload_cmd_buf, indices.gpu, indices_local, u64(len(indices.cpu)) * size_of(indices.cpu[0]))
     gpu.cmd_barrier(upload_cmd_buf, .Transfer, .All, {})
     gpu.queue_submit(queue, { upload_cmd_buf })
 
@@ -123,7 +129,7 @@ main :: proc()
         verts_data := gpu.arena_alloc(frame_arena, Vert_Data)
         verts_data.cpu.verts = verts_local
 
-        gpu.cmd_draw_indexed_instanced(cmd_buf, verts_data.gpu, nil, indices_local, 3, 1)
+        gpu.cmd_draw_indexed_instanced(cmd_buf, verts_data.gpu, nil, indices_local, u32(len(indices.cpu)), 1)
         gpu.cmd_end_render_pass(cmd_buf)
         gpu.queue_submit(queue, { cmd_buf }, frame_sem, next_frame)
 

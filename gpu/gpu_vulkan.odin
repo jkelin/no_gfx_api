@@ -203,6 +203,18 @@ _init :: proc(window: ^sdl.Window, frames_in_flight: u32)
 
     ctx.phys_device = chosen_phys_device
 
+    // Check descriptor sizes
+    props := vk.PhysicalDeviceDescriptorBufferPropertiesEXT {
+        sType = .PHYSICAL_DEVICE_DESCRIPTOR_BUFFER_PROPERTIES_EXT
+    };
+    props2 := vk.PhysicalDeviceProperties2 {
+        sType = .PHYSICAL_DEVICE_PROPERTIES_2,
+        pNext = &props
+    };
+    vk.GetPhysicalDeviceProperties2(ctx.phys_device, &props2)
+    ensure(props.storageImageDescriptorSize == 32, "Unexpected storage image descriptor size.")
+    ensure(props.sampledImageDescriptorSize == 32, "Unexpected sampled texture descriptor size.")
+
     queue_priorities := []f32 { 0.0, 1.0 }
     queue_create_infos := []vk.DeviceQueueCreateInfo {
         {
@@ -216,7 +228,8 @@ _init :: proc(window: ^sdl.Window, frames_in_flight: u32)
     // Device
     device_extensions := []cstring {
         vk.KHR_SWAPCHAIN_EXTENSION_NAME,
-        vk.EXT_SHADER_OBJECT_EXTENSION_NAME
+        vk.EXT_SHADER_OBJECT_EXTENSION_NAME,
+        vk.EXT_DESCRIPTOR_BUFFER_EXTENSION_NAME,
     }
 
     next: rawptr
@@ -553,7 +566,7 @@ _mem_alloc :: proc(bytes: u64, align: u64 = 1, mem_type := Memory.Default) -> ra
     if mem_type == .GPU {
         buf_usage = { .SHADER_DEVICE_ADDRESS, .INDEX_BUFFER, .STORAGE_BUFFER, .TRANSFER_DST }
     } else {
-        buf_usage = { .SHADER_DEVICE_ADDRESS, .INDEX_BUFFER, .STORAGE_BUFFER, .TRANSFER_SRC }
+        buf_usage = { .RESOURCE_DESCRIPTOR_BUFFER_EXT, .SHADER_DEVICE_ADDRESS, .STORAGE_BUFFER, .TRANSFER_SRC }
     }
     buf_ci := vk.BufferCreateInfo {
         sType = .BUFFER_CREATE_INFO,
@@ -652,7 +665,7 @@ _host_to_device_ptr :: proc(ptr: rawptr) -> rawptr
 _texture_create :: proc(desc: Texture_Desc, storage: rawptr, signal_sem: Semaphore = {}, signal_value: u64 = 0) -> Texture
 {
     vk_signal_sem := transmute(vk.Semaphore) signal_sem
-    
+
     alloc_idx, ok_s := search_alloc_from_gpu_ptr(storage)
     if !ok_s
     {
@@ -726,7 +739,7 @@ _texture_destroy :: proc(texture: ^Texture)
 
 _texture_size_and_align :: proc(desc: Texture_Desc) -> (size: u64, align: u64)
 {
-    // NOTE: Vulkan here is a huge PITA as always. Images created with the same create info
+    // IMPORTANT NOTE: Vulkan here is a huge PITA as always. Images created with the same create info
     // can have different size and alignment according to the standard so this is technically not standard compliant.
 
     image_ci := vk.ImageCreateInfo {
@@ -1111,22 +1124,6 @@ fatal_error :: proc(fmt: string, args: ..any, location := #caller_location)
     } else {
         log.panicf(fmt, ..args, location = location)
     }
-}
-
-@(private="file")
-find_mem_type :: proc(phys_device: vk.PhysicalDevice, type_filter: u32, properties: vk.MemoryPropertyFlags) -> u32
-{
-    mem_properties: vk.PhysicalDeviceMemoryProperties
-    vk.GetPhysicalDeviceMemoryProperties(phys_device, &mem_properties)
-    for i in 0..<mem_properties.memoryTypeCount
-    {
-        if (type_filter & (1 << i) != 0) &&
-           (mem_properties.memoryTypes[i].propertyFlags & properties) == properties {
-            return i
-        }
-    }
-
-    panic("Vulkan Error: Could not find suitable memory type!")
 }
 
 @(private="file")
