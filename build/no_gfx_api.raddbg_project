@@ -19,6 +19,12 @@ target:
   working_directory: ""
   enabled: 1
 }
+target:
+{
+  executable: 2_triangle.exe
+  working_directory: ""
+  enabled: 1
+}
 debug_info:
 {
   path: "C:/work/no_gfx_api/build/test.pdb"

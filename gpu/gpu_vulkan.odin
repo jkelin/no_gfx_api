@@ -650,9 +650,7 @@ _texture_create :: proc(desc: Texture_Desc, storage: rawptr) -> Texture
         log.error("Address does not reside in allocated GPU memory.")
         return {}
     }
-
     alloc := ctx.gpu_allocs[alloc_idx]
-    vma.create_aliasing_image2(ctx.vma_allocator)
 
     vma.create_aliasing_image2(ctx.vma_allocator)
     */
