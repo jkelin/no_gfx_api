@@ -53,6 +53,8 @@ Context :: struct
     gpu_ptr_to_alloc: map[rawptr]u32,  // From base GPU allocation pointer to metadata
     alloc_tree: rbt.Tree(Alloc_Range, u32),
 
+    // TODO: freelist of gpu allocs
+
     phys_device: vk.PhysicalDevice,
     device: vk.Device,
     queue: vk.Queue,
@@ -641,6 +643,19 @@ _host_to_device_ptr :: proc(ptr: rawptr) -> rawptr
 // Textures
 _texture_create :: proc(desc: Texture_Desc, storage: rawptr) -> Texture
 {
+    /*
+    alloc_idx, ok_s := search_alloc_from_gpu_ptr(storage)
+    if !ok_s
+    {
+        log.error("Address does not reside in allocated GPU memory.")
+        return {}
+    }
+
+    alloc := ctx.gpu_allocs[alloc_idx]
+    vma.create_aliasing_image2(ctx.vma_allocator)
+
+    vma.create_aliasing_image2(ctx.vma_allocator)
+    */
     return {}
 }
 
@@ -1398,4 +1413,60 @@ to_vk_render_attachment :: #force_inline proc(attach: Render_Attachment) -> vk.R
         storeOp = to_vk_store_op(attach.store_op),
         clearValue = { color = { float32 = attach.clear_color } }
     }
+}
+
+@(private="file")
+Pool_Element :: struct($T: typeid)
+{
+    using el: T,
+    present: bool,
+}
+
+@(private="file")
+Pool :: struct($T: typeid)
+{
+    array: [dynamic]Pool_Element(T),
+    free_list: [dynamic]u32,
+}
+
+@(private="file")
+pool_append :: proc(using pool: ^Pool($T), el: T) -> u32
+{
+    free_idx: u32
+    if len(free_list) > 0
+    {
+        free_idx = pop(&free_list)
+    }
+    else
+    {
+        append(&array, {})
+        free_idx = len(array) - 1
+    }
+
+    array[free_idx].el = el
+    array[free_idx].present = true
+    return free_idx
+}
+
+@(private="file")
+pool_free_idx :: proc(using pool: ^Pool($T), idx: u32)
+{
+    if idx == len(array)
+    {
+        pop(&array)
+    }
+    else
+    {
+        array[idx].present = false
+        append(&free_list, idx)
+    }
+}
+
+@(private="file")
+pool_destroy :: proc(using pool: ^Pool($T))
+{
+    delete(array)
+    delete(free_list)
+    array = {}
+    free_list = {}
 }
