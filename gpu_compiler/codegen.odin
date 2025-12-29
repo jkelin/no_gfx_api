@@ -240,7 +240,7 @@ codegen_expr :: proc(expression: ^Ast_Expr)
         case ^Ast_Member_Access:
         {
             codegen_expr(expr.target)
-            if expr.type.is_ptr || expr.type.is_slice {
+            if expr.target.type.is_ptr || expr.target.type.is_slice {
                 writef("._res_.%v", expr.member_name)
             } else {
                 writef(".%v", expr.member_name)

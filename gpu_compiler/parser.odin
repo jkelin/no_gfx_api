@@ -424,9 +424,10 @@ parse_expr :: proc(using p: ^Parser, prec: int = max(int)) -> ^Ast_Expr
         if undo_recurse do return lhs
 
         // Recurse
-        bin_op := make_node(p, Ast_Binary_Expr)
+        bin_op := make_expr(p, Ast_Binary_Expr)
         bin_op.op = op.op
         bin_op.lhs = lhs
+        at += 1
         bin_op.rhs = parse_expr(p)
         lhs = bin_op
     }

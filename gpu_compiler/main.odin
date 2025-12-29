@@ -52,6 +52,8 @@ main :: proc()
     ok_t := typecheck_ast(ast, allocator = perm_arena)
     if !ok_t do return
     codegen(ast, shader_type, path, output_path)
+
+    fmt.println(path)
 }
 
 load_file_and_null_terminate :: proc(path: string, allocator: runtime.Allocator) -> ([]u8, bool)

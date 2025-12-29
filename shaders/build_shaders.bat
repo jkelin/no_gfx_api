@@ -5,7 +5,6 @@ set glsl_flags=
 
 for %%f in (*.musl) do (
    ..\build\gpu_compiler.exe "%%f"
-   echo %%f
 )
 
 for %%f in (*.glsl) do (

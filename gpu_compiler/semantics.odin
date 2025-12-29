@@ -58,7 +58,7 @@ typecheck_statement :: proc(using c: ^Checker, statement: ^Ast_Statement)
         }
         case ^Ast_Var_Decl:
         {
-            
+
         }
         case ^Ast_Return:
         {
@@ -90,6 +90,8 @@ typecheck_expr :: proc(using c: ^Checker, expression: ^Ast_Expr)
             }
             expr.type = new(Ast_Type)
             expr.type^ = {
+                is_ptr = info.is_ptr,
+                is_slice = info.is_slice,
                 name = info.name,
                 struct_decl = info.struct_decl
             }
