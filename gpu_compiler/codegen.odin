@@ -87,7 +87,9 @@ codegen :: proc(ast: Ast, shader_type: Shader_Type, input_path: string, output_p
     writeln("")
 
     // Generate bindings
-    writeln("layout(set = 0, binding = 0) uniform sampler2D _res_textures_[];")
+    writeln("layout(set = 0, binding = 0) uniform texture2D _res_textures_[];")
+    writeln("layout(set = 1, binding = 0) uniform writeonly image2D _res_textures_rw_[];")
+    writeln("layout(set = 2, binding = 0) uniform sampler _res_samplers_[];")
     writeln("")
 
     data_type := ast.used_data_type if ast.used_data_type != "" else "void"
@@ -259,6 +261,30 @@ codegen_expr :: proc(expression: ^Ast_Expr)
         }
         case ^Ast_Call:
         {
+            // Check for intrinsics
+            is_intrinsic := false
+            call_ident, is_ident := expr.target.derived_expr.(^Ast_Ident_Expr)
+            if is_ident
+            {
+                text := call_ident.token.text
+                if text == "sample"
+                {
+                    assert(len(expr.args) == 3)
+
+                    write("texture(sampler2D(_res_textures_[")
+                    codegen_expr(expr.args[0])
+                    write("], _res_samplers_[")
+                    codegen_expr(expr.args[1])
+                    write("]), ")
+                    codegen_expr(expr.args[2])
+                    write(")")
+
+                    is_intrinsic = true
+                }
+            }
+
+            if is_intrinsic do break
+
             codegen_expr(expr.target)
             write("(")
             for arg, i in expr.args

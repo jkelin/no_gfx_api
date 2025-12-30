@@ -4,12 +4,13 @@ package main
 import "core:fmt"
 import "base:runtime"
 
-typecheck_ast :: proc(ast: Ast, allocator: runtime.Allocator) -> bool
+typecheck_ast :: proc(ast: Ast, input_path: string, allocator: runtime.Allocator) -> bool
 {
     context.allocator = allocator
 
     c := Checker {
-        ast = ast
+        ast = ast,
+        input_path = input_path
     }
 
     for declaration in ast.scope.decls
@@ -104,9 +105,17 @@ typecheck_expr :: proc(using c: ^Checker, expression: ^Ast_Expr)
         {
             typecheck_expr(c, expr.target)
 
-            if expr.member_name == "xyz" {
+            if expr.member_name == "xyz"
+            {
                 type := new(Ast_Type)
                 type.name = "vec3"
+                expr.type = type
+                break
+            }
+            else if expr.member_name == "xy"
+            {
+                type := new(Ast_Type)
+                type.name = "vec2"
                 expr.type = type
                 break
             }
@@ -153,7 +162,11 @@ typecheck_expr :: proc(using c: ^Checker, expression: ^Ast_Expr)
             // TODO: Only constructors work at the moment
             target, is_ident := expr.target.derived_expr.(^Ast_Ident_Expr)
             if !is_ident do panic("Not implemented!")
-            if !is_primitive_type(target.token.text) do panic("Not implemented!")
+            // if !is_primitive_type(target.token.text) do panic("Not implemented!")
+
+            if target.token.text == "sample" && len(expr.args) != 3 {
+                typecheck_error(c, expr.token, "Incorrect number of arguments for 'sample' call, expecting 3.")
+            }
 
             for arg in expr.args {
                 typecheck_expr(c, arg)

@@ -1,5 +1,10 @@
 
-main :: (color: vec4 @in_loc(0)) -> vec4 @out_loc(0)
+Data :: struct
 {
-    return color;
+    fade: float,
+}
+
+main :: (uv: vec2 @in_loc(0), data: ^Data @data) -> vec4 @out_loc(0)
+{
+    return mix(sample(0, 0, uv), sample(1, 0, uv), data.fade);
 }

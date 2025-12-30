@@ -6,6 +6,7 @@ layout(location = 0) out vec4 _res_out_loc0_;
 layout(location = 0) in vec2 _res_in_loc0_;
 
 layout(buffer_reference) readonly buffer _res_ptr_void;
+layout(buffer_reference) readonly buffer _res_ptr_Data;
 
 struct Data
 {
@@ -21,13 +22,14 @@ layout(set = 2, binding = 0) uniform sampler _res_samplers_[];
 
 layout(push_constant, std140) uniform Push
 {
-    _res_ptr_void _res_vert_data_;
+    _res_ptr_Data _res_vert_data_;
     _res_ptr_Data _res_data_;
 };
 
 void main()
 {
-    vec4 color = texture(sampler2D(_res_textures_[0], _res_samplers_[0]), _res_in_loc0_);
-    color = mix(color, texture(sampler2D(_res_textures_[1], _res_samplers_[0]), _res_in_loc0_), _res_data_._res_.fade);
-    _res_out_loc0_ = color;
+    vec2 uv = _res_in_loc0_;
+    _res_ptr_Data data = _res_data_;
+    _res_out_loc0_ = mix(texture(sampler2D(_res_textures_[0], _res_samplers_[0]), uv), texture(sampler2D(_res_textures_[1], _res_samplers_[0]), uv), data._res_.fade);
 }
+

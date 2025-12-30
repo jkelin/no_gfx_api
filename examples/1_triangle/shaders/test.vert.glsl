@@ -5,8 +5,8 @@
 layout(location = 0) out vec4 _res_out_loc0_;
 
 layout(buffer_reference) readonly buffer _res_ptr_void;
-layout(buffer_reference) readonly buffer _res_ptr_Data;
 layout(buffer_reference) readonly buffer _res_slice_Vertex;
+layout(buffer_reference) readonly buffer _res_ptr_Data;
 
 struct Vertex
 {
@@ -26,10 +26,12 @@ struct Output
 };
 
 layout(buffer_reference, std140) readonly buffer _res_ptr_void { uint _res_void_; };
-layout(buffer_reference, std140) readonly buffer _res_ptr_Data { Data _res_; };
 layout(buffer_reference, std140) readonly buffer _res_slice_Vertex { Vertex _res_; };
+layout(buffer_reference, std140) readonly buffer _res_ptr_Data { Data _res_; };
 
-layout(set = 0, binding = 0) uniform sampler2D _res_textures_[];
+layout(set = 0, binding = 0) uniform texture2D _res_textures_[];
+layout(set = 1, binding = 0) uniform writeonly image2D _res_textures_rw_[];
+layout(set = 2, binding = 0) uniform sampler _res_samplers_[];
 
 layout(push_constant, std140) uniform Push
 {

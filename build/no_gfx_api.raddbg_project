@@ -18,7 +18,7 @@ target:
 {
   executable: 1_triangle.exe
   working_directory: ""
-  enabled: 1
+  enabled: 0
 }
 target:
 {
@@ -49,10 +49,11 @@ debug_info:
 debug_info:
 {
   path: "C:/work/no_gfx_api/build/2_textures.pdb"
-  timestamp: 66202515006236
+  timestamp: 66202527854655
 }
 breakpoint:
 {
   address_location: "gpu::_cleanup"
-  hit_count: 1
+  hit_count: 0
+  enabled: 0
 }

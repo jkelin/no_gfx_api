@@ -124,8 +124,8 @@ _init :: proc(window: ^sdl.Window, frames_in_flight: u32)
         when ODIN_DEBUG
         {
             validation_features := []vk.ValidationFeatureEnableEXT {
-                //.GPU_ASSISTED,
-                //.GPU_ASSISTED_RESERVE_BINDING_SLOT,
+                // .GPU_ASSISTED,
+                // .GPU_ASSISTED_RESERVE_BINDING_SLOT,
                 .SYNCHRONIZATION_VALIDATION,
             }
         }

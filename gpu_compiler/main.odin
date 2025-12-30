@@ -49,7 +49,7 @@ main :: proc()
     tokens := lex_file(file_content, allocator = perm_arena)
     ast, ok_p := parse_file(path, tokens, allocator = perm_arena)
     if !ok_p do return
-    ok_t := typecheck_ast(ast, allocator = perm_arena)
+    ok_t := typecheck_ast(ast, path, allocator = perm_arena)
     if !ok_t do return
     codegen(ast, shader_type, path, output_path)
 

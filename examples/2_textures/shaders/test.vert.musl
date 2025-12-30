@@ -2,6 +2,7 @@
 Vertex :: struct
 {
     pos: vec4,
+    uv: vec4,
 }
 
 Data :: struct
@@ -12,13 +13,13 @@ Data :: struct
 Output :: struct
 {
     pos: vec4 @position,
-    color: vec4 @out_loc(0),
+    uv: vec2 @out_loc(0),
 }
 
 main :: (vert_id: uint @vert_id, data: ^Data @data) -> Output
 {
     vert_out: Output;
     vert_out.pos = vec4(data.verts[vert_id].pos.xyz, 1.0);
-    vert_out.color = vec4(1.0, 0.0, 0.0, 1.0);
+    vert_out.uv = vec2(data.verts[vert_id].uv.xy);
     return vert_out;
 }
