@@ -131,14 +131,8 @@ typecheck_expr :: proc(using c: ^Checker, expression: ^Ast_Expr)
         {
             switch v in expr.token.value
             {
-                case u64:
-                {
-                    expr.type = &UINT_TYPE
-                }
-                case f32:
-                {
-                    expr.type = &FLOAT_TYPE
-                }
+                case u64: expr.type = &UINT_TYPE
+                case f32: expr.type = &FLOAT_TYPE
             }
         }
         case ^Ast_Member_Access:
@@ -277,6 +271,8 @@ UINT_TYPE := Ast_Type { kind = .Primitive, primitive_kind = .Uint, name = { text
 VEC2_TYPE := Ast_Type { kind = .Primitive, primitive_kind = .Vec2, name = { text = "vec2", line = 0, value = {}, type = {}, col_start = {} } }
 VEC3_TYPE := Ast_Type { kind = .Primitive, primitive_kind = .Vec3, name = { text = "vec3", line = 0, value = {}, type = {}, col_start = {} } }
 VEC4_TYPE := Ast_Type { kind = .Primitive, primitive_kind = .Vec4, name = { text = "vec4", line = 0, value = {}, type = {}, col_start = {} } }
+TEXTUREID_TYPE := Ast_Type { kind = .Primitive, primitive_kind = .Texture_ID, name = { text = "textureid", line = {}, value = {}, type = {}, col_start = {} } }
+SAMPLERID_TYPE := Ast_Type { kind = .Primitive, primitive_kind = .Sampler_ID, name = { text = "samplerid", line = {}, value = {}, type = {}, col_start = {} } }
 
 same_type :: proc(type1: ^Ast_Type, type2: ^Ast_Type) -> bool
 {
@@ -353,7 +349,7 @@ INTRINSICS: [dynamic]^Ast_Decl
 
 add_intrinsics :: proc()
 {
-    add_intrinsic("sample", { &UINT_TYPE, &UINT_TYPE, &VEC2_TYPE }, { "tex_idx", "sampler_idx", "uv" }, &VEC4_TYPE)
+    add_intrinsic("sample", { &TEXTUREID_TYPE, &SAMPLERID_TYPE, &VEC2_TYPE }, { "tex_idx", "sampler_idx", "uv" }, &VEC4_TYPE)
     add_intrinsic("mix", { &VEC4_TYPE, &VEC4_TYPE, &FLOAT_TYPE }, { "a", "b", "t" }, &VEC4_TYPE)
 }
 

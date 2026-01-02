@@ -1,10 +1,13 @@
 
 Data :: struct
 {
+    texture_a: textureid,
+    texture_b: textureid,
+    s: samplerid,
     fade: float,
 }
 
 main :: (uv: vec2 @in_loc(0), data: ^Data @data) -> vec4 @out_loc(0)
 {
-    return mix(sample(0, 0, uv), sample(1, 0, uv), data.fade);
+    return mix(sample(data.texture_a, data.s, uv), sample(data.texture_b, data.s, uv), data.fade);
 }

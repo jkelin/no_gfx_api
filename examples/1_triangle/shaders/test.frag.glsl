@@ -1,6 +1,7 @@
 #version 460
 #extension GL_EXT_buffer_reference : require
 #extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_nonuniform_qualifier : require
 
 layout(location = 0) out vec4 _res_out_loc0_;
 layout(location = 0) in vec4 _res_in_loc0_;

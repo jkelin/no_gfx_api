@@ -197,7 +197,7 @@ codegen_statement :: proc(statement: ^Ast_Statement, ast: Ast, proc_def: ^Ast_Pr
 
                 if type.kind == .Struct
                 {
-                    for member in stmt.expr.type.members
+                    for member in type.members
                     {
                         if member.attr == nil do continue
                         writef("%v = ", attribute_to_glsl(member.attr.?))
@@ -207,10 +207,9 @@ codegen_statement :: proc(statement: ^Ast_Statement, ast: Ast, proc_def: ^Ast_Pr
                 }
                 else
                 {
-                    ret_attr_unpacked, ok := ret_attr.?
-                    if ok && ret_attr_unpacked.type == .Out_Loc
+                    if ret_attr != nil && ret_attr.?.type == .Out_Loc
                     {
-                        writef("%v = ", attribute_to_glsl(ret_attr_unpacked))
+                        writef("%v = ", attribute_to_glsl(ret_attr.?))
                         codegen_expr(stmt.expr)
                     }
                     else
@@ -276,11 +275,11 @@ codegen_expr :: proc(expression: ^Ast_Expr)
                 {
                     assert(len(expr.args) == 3)
 
-                    write("texture(sampler2D(_res_textures_[")
+                    write("texture(sampler2D(_res_textures_[nonuniformEXT(")
                     codegen_expr(expr.args[0])
-                    write("], _res_samplers_[")
+                    write(")], _res_samplers_[nonuniformEXT(")
                     codegen_expr(expr.args[1])
-                    write("]), ")
+                    write(")]), ")
                     codegen_expr(expr.args[2])
                     write(")")
 
@@ -327,6 +326,8 @@ type_to_glsl :: proc(type: ^Ast_Type) -> string
                 case .Vec2: return "vec2"
                 case .Vec3: return "vec3"
                 case .Vec4: return "vec4"
+                case .Texture_ID: return "uint"
+                case .Sampler_ID: return "uint"
             }
         }
     }
@@ -383,6 +384,7 @@ write_preamble :: proc()
     writeln("#version 460")
     writeln("#extension GL_EXT_buffer_reference : require")
     writeln("#extension GL_EXT_buffer_reference2 : require")
+    writeln("#extension GL_EXT_nonuniform_qualifier : require")
     writeln("")
 }
 

@@ -152,9 +152,15 @@ main :: proc()
         verts_data := gpu.arena_alloc(frame_arena, Vert_Data)
         verts_data.cpu.verts = verts_local
         Frag_Data :: struct {
+            texture_a: u32,
+            texture_b: u32,
+            sampler: u32,
             fade: f32
         }
         frag_data := gpu.arena_alloc(frame_arena, Frag_Data)
+        frag_data.cpu.texture_a = 0
+        frag_data.cpu.texture_b = 1
+        frag_data.cpu.sampler = 0
         frag_data.cpu.fade = changing_fade(delta_time)
 
         gpu.cmd_draw_indexed_instanced(cmd_buf, verts_data.gpu, frag_data.gpu, indices_local, u32(len(indices.cpu)), 1)

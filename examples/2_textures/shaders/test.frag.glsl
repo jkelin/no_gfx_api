@@ -1,6 +1,7 @@
 #version 460
 #extension GL_EXT_buffer_reference : require
 #extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_nonuniform_qualifier : require
 
 layout(location = 0) out vec4 _res_out_loc0_;
 layout(location = 0) in vec2 _res_in_loc0_;
@@ -10,6 +11,9 @@ layout(buffer_reference) readonly buffer _res_ptr_Data;
 
 struct Data
 {
+    uint texture_a;
+    uint texture_b;
+    uint s;
     float fade;
 };
 
@@ -31,6 +35,6 @@ void main()
 {
     vec2 uv = _res_in_loc0_;
     _res_ptr_Data data = _res_data_;
-    _res_out_loc0_ = mix(texture(sampler2D(_res_textures_[0], _res_samplers_[0]), uv), texture(sampler2D(_res_textures_[1], _res_samplers_[0]), uv), data._res_.fade);
+    _res_out_loc0_ = mix(texture(sampler2D(_res_textures_[nonuniformEXT(data._res_.texture_a)], _res_samplers_[nonuniformEXT(data._res_.s)]), uv), texture(sampler2D(_res_textures_[nonuniformEXT(data._res_.texture_b)], _res_samplers_[nonuniformEXT(data._res_.s)]), uv), data._res_.fade);
 }
 
