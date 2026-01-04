@@ -2,6 +2,7 @@
 package gpu
 
 import "core:slice"
+import "base:runtime"
 
 import sdl "vendor:sdl3"
 import vk "vendor:vulkan"
@@ -152,6 +153,9 @@ texture_destroy: proc(texture: ^Texture) : _texture_destroy
 texture_view_descriptor: proc(texture: Texture, view_desc: Texture_View_Desc) -> Texture_Descriptor : _texture_view_descriptor
 //texture_rw_view_descriptor: proc(texture: Texture, view_desc: Texture_View_Desc) -> [4]u64 : _texture_rw_view_descriptor
 sampler_descriptor: proc(sampler_desc: Sampler_Desc) -> Sampler_Descriptor : _sampler_descriptor
+get_texture_view_descriptor_size: proc() -> u32 : _get_texture_view_descriptor_size
+get_texture_rw_view_descriptor_size: proc() -> u32 : _get_texture_rw_view_descriptor_size
+get_sampler_descriptor_size: proc() -> u32 : _get_sampler_descriptor_size
 
 // Shaders
 shader_create: proc(code: []u32, type: Shader_Type) -> Shader : _shader_create
@@ -319,4 +323,25 @@ free_and_destroy_texture :: proc(texture: ^Owned_Texture)
     mem_free(texture.mem)
     texture_destroy(texture)
     texture^ = {}
+}
+
+set_texture_desc :: #force_inline proc(desc_heap: rawptr, idx: u32, desc: Texture_Descriptor)
+{
+    desc_size := #force_inline get_texture_view_descriptor_size()
+    tmp := desc
+    runtime.mem_copy(auto_cast(uintptr(desc_heap) + uintptr(idx * desc_size)), &tmp, int(desc_size))
+}
+
+set_texture_rw_desc :: #force_inline proc(desc_heap: rawptr, idx: u32, desc: Texture_Descriptor)
+{
+    desc_size := #force_inline get_texture_rw_view_descriptor_size()
+    tmp := desc
+    runtime.mem_copy(auto_cast(uintptr(desc_heap) + uintptr(idx * desc_size)), &tmp, int(desc_size))
+}
+
+set_sampler_desc :: #force_inline proc(desc_heap: rawptr, idx: u32, desc: Sampler_Descriptor)
+{
+    desc_size := #force_inline get_sampler_descriptor_size()
+    tmp := desc
+    runtime.mem_copy(auto_cast(uintptr(desc_heap) + uintptr(idx * desc_size)), &tmp, int(desc_size))
 }

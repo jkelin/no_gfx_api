@@ -48,10 +48,10 @@ main :: proc()
         gpu.shader_destroy(&frag_shader)
     }
 
-    texture_heap := gpu.mem_alloc_typed(gpu.Texture_Descriptor, 65536)
-    defer gpu.mem_free(raw_data(texture_heap))
-    sampler_heap := gpu.mem_alloc_typed(gpu.Sampler_Descriptor, 10)
-    defer gpu.mem_free(raw_data(sampler_heap))
+    texture_heap := gpu.mem_alloc(size_of(gpu.Texture_Descriptor) * 65536)
+    defer gpu.mem_free(texture_heap)
+    sampler_heap := gpu.mem_alloc(size_of(gpu.Sampler_Descriptor) * 10)
+    defer gpu.mem_free(sampler_heap)
 
     Vertex :: struct { pos: [4]f32, uv: [4]f32 }
 
@@ -102,9 +102,9 @@ main :: proc()
 
     gpu.queue_submit(queue, { upload_cmd_buf })
 
-    texture_heap[1] = gpu.texture_view_descriptor(peach_tex, { format = .RGBA8_Unorm })
-    texture_heap[0] = gpu.texture_view_descriptor(bowser_tex, { format = .RGBA8_Unorm })
-    sampler_heap[0] = gpu.sampler_descriptor({})
+    gpu.set_texture_desc(texture_heap, 0, gpu.texture_view_descriptor(bowser_tex, { format = .RGBA8_Unorm }))
+    gpu.set_texture_desc(texture_heap, 1, gpu.texture_view_descriptor(peach_tex, { format = .RGBA8_Unorm }))
+    gpu.set_sampler_desc(sampler_heap, 0, gpu.sampler_descriptor({}))
 
     now_ts := sdl.GetPerformanceCounter()
 
@@ -143,8 +143,8 @@ main :: proc()
             }
         })
         gpu.cmd_set_shaders(cmd_buf, vert_shader, frag_shader)
-        textures := gpu.host_to_device_ptr(raw_data(texture_heap))
-        samplers := gpu.host_to_device_ptr(raw_data(sampler_heap))
+        textures := gpu.host_to_device_ptr(texture_heap)
+        samplers := gpu.host_to_device_ptr(sampler_heap)
         gpu.cmd_set_texture_heap(cmd_buf, textures, nil, samplers)
         Vert_Data :: struct {
             verts: rawptr,

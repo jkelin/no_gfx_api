@@ -39,6 +39,18 @@ Timeline :: struct
     recording: bool,
 }
 
+Image_View_Info :: struct
+{
+    info: vk.ImageViewCreateInfo,
+    view: vk.ImageView,
+}
+
+Sampler_Info :: struct
+{
+    info: vk.SamplerCreateInfo,
+    sampler: vk.Sampler,
+}
+
 @(private="file")
 Context :: struct
 {
@@ -69,9 +81,18 @@ Context :: struct
     samplers_desc_layout: vk.DescriptorSetLayout,
     common_pipeline_layout: vk.PipelineLayout,
 
+    // Descriptor objects
+    image_views: map[vk.Image][dynamic]Image_View_Info,
+    samplers: [dynamic]Sampler_Info,
+
     // Swapchain
     swapchain: Swapchain,
     swapchain_image_idx: u32,
+
+    // Descriptor sizes
+    texture_desc_size: u32,
+    texture_rw_desc_size: u32,
+    sampler_desc_size: u32,
 }
 
 // Initialization
@@ -214,9 +235,12 @@ _init :: proc(window: ^sdl.Window, frames_in_flight: u32)
         pNext = &props
     };
     vk.GetPhysicalDeviceProperties2(ctx.phys_device, &props2)
-    ensure(props.storageImageDescriptorSize == 32, "Unexpected storage image descriptor size.")
-    ensure(props.sampledImageDescriptorSize == 32, "Unexpected sampled texture descriptor size.")
-    ensure(props.samplerDescriptorSize == 16, "Unexpected sampler descriptor size.")
+    ensure(props.storageImageDescriptorSize <= 32, "Unexpected storage image descriptor size.")
+    ensure(props.sampledImageDescriptorSize <= 32, "Unexpected sampled texture descriptor size.")
+    ensure(props.samplerDescriptorSize <= 16, "Unexpected sampler descriptor size.")
+    ctx.texture_desc_size = u32(props.sampledImageDescriptorSize)
+    ctx.texture_rw_desc_size = u32(props.storageImageDescriptorSize)
+    ctx.sampler_desc_size = u32(props.samplerDescriptorSize)
 
     queue_priorities := []f32 { 0.0, 1.0 }
     queue_create_infos := []vk.DeviceQueueCreateInfo {
@@ -423,6 +447,10 @@ _init :: proc(window: ^sdl.Window, frames_in_flight: u32)
 _cleanup :: proc()
 {
     vk.DestroyCommandPool(ctx.device, ctx.cmd_pool, nil)
+
+    for &sampler in ctx.samplers {
+        vk.DestroySampler(ctx.device, sampler.sampler, nil)
+    }
 
     destroy_swapchain(ctx.swapchain)
     for timeline in ctx.cmd_bufs_timelines {
@@ -792,6 +820,12 @@ _texture_create :: proc(desc: Texture_Desc, storage: rawptr, signal_sem: Semapho
 _texture_destroy :: proc(texture: ^Texture)
 {
     vk_image := transmute(vk.Image) texture.handle
+
+    views := &ctx.image_views[vk_image]
+    for view in views {
+        vk.DestroyImageView(ctx.device, view.view, nil)
+    }
+
     vk.DestroyImage(ctx.device, vk_image, nil)
     texture^ = {}
 }
@@ -823,6 +857,36 @@ _texture_size_and_align :: proc(desc: Texture_Desc) -> (size: u64, align: u64)
     return u64(mem_requirements.size), u64(mem_requirements.alignment)
 }
 
+@(private="file")
+get_or_add_image_view :: proc(image: vk.Image, info: vk.ImageViewCreateInfo) -> vk.ImageView
+{
+    entry, found := &ctx.image_views[image]
+    if !found
+    {
+        ctx.image_views[image] = {}
+        image_view: vk.ImageView
+        view_ci := info
+        vk_check(vk.CreateImageView(ctx.device, &view_ci, nil, &image_view))
+        append(&ctx.image_views[image], Image_View_Info { info, image_view })
+        return image_view
+    }
+    else
+    {
+        for view in entry
+        {
+            if view.info == info {
+                return view.view
+            }
+        }
+
+        image_view: vk.ImageView
+        view_ci := info
+        vk_check(vk.CreateImageView(ctx.device, &view_ci, nil, &image_view))
+        append(entry, Image_View_Info { info, image_view })
+        return image_view
+    }
+}
+
 _texture_view_descriptor :: proc(texture: Texture, view_desc: Texture_View_Desc) -> Texture_Descriptor
 {
     vk_image := transmute(vk.Image) texture.handle
@@ -838,12 +902,7 @@ _texture_view_descriptor :: proc(texture: Texture, view_desc: Texture_View_Desc)
             layerCount = 1,
         }
     }
-    view: vk.ImageView
-    vk_check(vk.CreateImageView(ctx.device, &image_view_ci, nil, &view))
-    defer vk.DestroyImageView(ctx.device, view, nil)
-
-    // IMPORTANT NOTE: Destroying the view immediately might technically be illegal here?
-    // This is probably not standard compliant...
+    view := get_or_add_image_view(vk_image, image_view_ci)
 
     desc: Texture_Descriptor
     info := vk.DescriptorGetInfoEXT {
@@ -868,12 +927,7 @@ _sampler_descriptor :: proc(sampler_desc: Sampler_Desc) -> Sampler_Descriptor
         addressModeV = to_vk_address_mode(sampler_desc.address_mode_v),
         addressModeW = to_vk_address_mode(sampler_desc.address_mode_w),
     }
-    sampler: vk.Sampler
-    vk_check(vk.CreateSampler(ctx.device, &sampler_ci, nil, &sampler))
-    defer vk.DestroySampler(ctx.device, sampler, nil)
-
-    // IMPORTANT NOTE: Destroying the sampler immediately might technically be illegal here?
-    // This is probably not standard compliant...
+    sampler := get_or_add_sampler(sampler_ci)
 
     desc: Sampler_Descriptor
     info := vk.DescriptorGetInfoEXT {
@@ -883,6 +937,37 @@ _sampler_descriptor :: proc(sampler_desc: Sampler_Desc) -> Sampler_Descriptor
     }
     vk.GetDescriptorEXT(ctx.device, &info, size_of(desc), &desc)
     return desc
+
+    get_or_add_sampler :: proc(info: vk.SamplerCreateInfo) -> vk.Sampler
+    {
+        for sampler in ctx.samplers
+        {
+            if sampler.info == info {
+                return sampler.sampler
+            }
+        }
+
+        sampler: vk.Sampler
+        sampler_ci := info
+        vk_check(vk.CreateSampler(ctx.device, &sampler_ci, nil, &sampler))
+        append(&ctx.samplers, Sampler_Info { info, sampler })
+        return sampler
+    }
+}
+
+_get_texture_view_descriptor_size :: proc() -> u32
+{
+    return ctx.texture_desc_size
+}
+
+_get_texture_rw_view_descriptor_size :: proc() -> u32
+{
+    return ctx.texture_rw_desc_size
+}
+
+_get_sampler_descriptor_size :: proc() -> u32
+{
+    return ctx.sampler_desc_size
 }
 
 // Shaders
