@@ -1,0 +1,5 @@
+
+main :: (color: vec4 @in_loc(0)) -> vec4 @out_loc(0)
+{
+    return color;
+}

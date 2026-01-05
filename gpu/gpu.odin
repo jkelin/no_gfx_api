@@ -196,6 +196,11 @@ cmd_draw_indexed_instanced: proc(cmd_buf: Command_Buffer, vertex_data: rawptr, f
                                  indices: rawptr, index_count: u32, instance_count: u32 = 1) : _cmd_draw_indexed_instanced
 cmd_draw_indexed_instanced_indirect: proc(cmd_buf: Command_Buffer, vertex_data: rawptr, fragment_data: rawptr,
                                           indices: rawptr, arguments: rawptr) : _cmd_draw_indexed_instanced_indirect
+cmd_draw_indexed_instanced_indirect_multi: proc(cmd_buf: Command_Buffer, data_vertex: rawptr, data_pixel: rawptr,
+                                                 indices: rawptr, arguments: rawptr, draw_count: rawptr) : _cmd_draw_indexed_instanced_indirect_multi
+cmd_draw_indexed_instanced_indirect_multi_data: proc(cmd_buf: Command_Buffer, data_vertex: rawptr, data_pixel: rawptr,
+                                                      indices: rawptr, arguments: rawptr, draw_count: rawptr, data_vertex_shared: rawptr,
+                                                      data_pixel_shared: rawptr) : _cmd_draw_indexed_instanced_indirect_multi_data
 
 /////////////////////////
 // Userland Utilities

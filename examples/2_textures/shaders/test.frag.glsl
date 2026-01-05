@@ -28,13 +28,15 @@ layout(set = 2, binding = 0) uniform sampler _res_samplers_[];
 layout(push_constant, std140) uniform Push
 {
     _res_ptr_Data _res_vert_data_;
-    _res_ptr_Data _res_data_;
+    _res_ptr_Data _res_frag_data_;
+    _res_ptr_void _res_vert_indirect_data_;
+    _res_ptr_void _res_frag_indirect_data_;
 };
 
 void main()
 {
     vec2 uv = _res_in_loc0_;
-    _res_ptr_Data data = _res_data_;
+    _res_ptr_Data data = _res_frag_data_;
     _res_out_loc0_ = mix(texture(sampler2D(_res_textures_[nonuniformEXT(data._res_.texture_a)], _res_samplers_[nonuniformEXT(data._res_.s)]), uv), texture(sampler2D(_res_textures_[nonuniformEXT(data._res_.texture_b)], _res_samplers_[nonuniformEXT(data._res_.s)]), uv), data._res_.fade);
 }
 

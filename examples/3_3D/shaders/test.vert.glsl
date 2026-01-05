@@ -38,14 +38,16 @@ layout(set = 2, binding = 0) uniform sampler _res_samplers_[];
 
 layout(push_constant, std140) uniform Push
 {
-    _res_ptr_Data _res_data_;
+    _res_ptr_Data _res_vert_data_;
     _res_ptr_Data _res_frag_data_;
+    _res_ptr_void _res_vert_indirect_data_;
+    _res_ptr_void _res_frag_indirect_data_;
 };
 
 void main()
 {
     uint vert_id = gl_VertexIndex;
-    _res_ptr_Data data = _res_data_;
+    _res_ptr_Data data = _res_vert_data_;
     vec4 clip_pos;
     vec4 world_normal;
     Output vert_out;

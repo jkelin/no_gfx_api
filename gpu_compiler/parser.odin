@@ -20,6 +20,7 @@ Ast :: struct
     used_in_locations: map[u32]Ast_Type,
     used_out_locations: map[u32]Ast_Type,
     used_data_type: ^Ast_Type,
+    used_indirect_data_type: ^Ast_Type,
     scope: ^Ast_Scope,
     procs: [dynamic]^Ast_Proc_Def,
 }
@@ -77,6 +78,9 @@ Ast_Attribute_Type :: enum
     Vert_ID,
     Position,
     Data,
+    Instance_ID,
+    Draw_ID,
+    Indirect_Data,
 
     // With args:
     Out_Loc,
@@ -237,6 +241,7 @@ Parser :: struct
     used_out_locations: map[u32]Ast_Type,
     used_in_locations: map[u32]Ast_Type,
     used_data_type: ^Ast_Type,
+    used_indirect_data_type: ^Ast_Type,
 }
 
 _parse_file :: proc(using p: ^Parser) -> Ast
@@ -284,6 +289,7 @@ _parse_file :: proc(using p: ^Parser) -> Ast
     ast.used_out_locations = used_out_locations
     ast.used_in_locations = used_in_locations
     ast.used_data_type = used_data_type
+    ast.used_indirect_data_type = used_indirect_data_type
     return ast
 }
 
@@ -573,6 +579,8 @@ parse_decl_list_elem :: proc(using p: ^Parser, add_to_scope: bool) -> ^Ast_Decl
     {
         if node.attr.?.type == .Data {
             used_data_type = node.type
+        } else if node.attr.?.type == .Indirect_Data {
+            used_indirect_data_type = node.type
         }
 
         if node.attr.?.type == .In_Loc {
@@ -659,6 +667,9 @@ parse_attribute :: proc(using p: ^Parser) -> Maybe(Ast_Attribute)
         case "vert_id": attr.type = .Vert_ID
         case "position": attr.type = .Position
         case "data": attr.type = .Data
+        case "instance_id": attr.type = .Instance_ID
+        case "draw_id": attr.type = .Draw_ID
+        case "indirect_data": attr.type = .Indirect_Data
         case "in_loc":
         {
             // ??? Why is the compiler making me do this?

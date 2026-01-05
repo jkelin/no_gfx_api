@@ -103,24 +103,20 @@ codegen :: proc(ast: Ast, shader_type: Shader_Type, input_path: string, output_p
     writeln("layout(set = 0, binding = 0) uniform texture2D _res_textures_[];")
     writeln("layout(set = 1, binding = 0) uniform writeonly image2D _res_textures_rw_[];")
     writeln("layout(set = 2, binding = 0) uniform sampler _res_samplers_[];")
+    
     writeln("")
 
+    // Push constants always contain 4 pointers: vert_data, frag_data, vert_indirect_data, frag_indirect_data
+    data_type_str := type_to_glsl(ast.used_data_type) if ast.used_data_type != nil else "_res_ptr_void"
+    indirect_data_ptr_type_str := type_to_glsl(ast.used_indirect_data_type) if ast.used_indirect_data_type != nil else "_res_ptr_void"
+    
     writeln("layout(push_constant, std140) uniform Push")
     writeln("{")
-    data_type_str := type_to_glsl(ast.used_data_type) if ast.used_data_type != nil else "_res_ptr_void"
-    if writer_scope()
-    {
-        if shader_type == .Vertex {
-            writefln("%v _res_data_;", data_type_str)
-        } else {
-            writefln("%v _res_vert_data_;", data_type_str)
-        }
-
-        if shader_type == .Fragment {
-            writefln("%v _res_data_;", data_type_str)
-        } else {
-            writefln("%v _res_frag_data_;", data_type_str)
-        }
+    if writer_scope() {
+        writefln("%v _res_vert_data_;", data_type_str)
+        writefln("%v _res_frag_data_;", data_type_str)
+        writefln("%v _res_vert_indirect_data_;", indirect_data_ptr_type_str)
+        writefln("%v _res_frag_indirect_data_;", indirect_data_ptr_type_str)
     }
     writeln("};")
     writeln("")
@@ -152,13 +148,14 @@ codegen :: proc(ast: Ast, shader_type: Shader_Type, input_path: string, output_p
                 if var_decl.attr == nil {
                     writefln("%v %v;", type_to_glsl(var_decl.type), var_decl.name)
                 } else {
-                    writefln("%v %v = %v;", type_to_glsl(var_decl.type), var_decl.name, attribute_to_glsl(var_decl.attr.?))
+                    attr_glsl := attribute_to_glsl(var_decl.attr.?, ast, shader_type)
+                    writefln("%v %v = %v;", type_to_glsl(var_decl.type), var_decl.name, attr_glsl)
                 }
             }
 
             for statement in proc_def.statements
             {
-                codegen_statement(statement, ast, proc_def)
+                codegen_statement(statement, ast, proc_def, shader_type)
             }
         }
         writeln("}")
@@ -168,7 +165,7 @@ codegen :: proc(ast: Ast, shader_type: Shader_Type, input_path: string, output_p
     writer_output_to_file(output_path)
 }
 
-codegen_statement :: proc(statement: ^Ast_Statement, ast: Ast, proc_def: ^Ast_Proc_Def)
+codegen_statement :: proc(statement: ^Ast_Statement, ast: Ast, proc_def: ^Ast_Proc_Def, shader_type: Shader_Type)
 {
     write_begin("")
 
@@ -200,7 +197,7 @@ codegen_statement :: proc(statement: ^Ast_Statement, ast: Ast, proc_def: ^Ast_Pr
                     for member in type.members
                     {
                         if member.attr == nil do continue
-                        writef("%v = ", attribute_to_glsl(member.attr.?))
+                        writef("%v = ", attribute_to_glsl(member.attr.?, ast, shader_type))
                         codegen_expr(stmt.expr)
                         writef(".%v; ", member.name)
                     }
@@ -209,7 +206,7 @@ codegen_statement :: proc(statement: ^Ast_Statement, ast: Ast, proc_def: ^Ast_Pr
                 {
                     if ret_attr != nil && ret_attr.?.type == .Out_Loc
                     {
-                        writef("%v = ", attribute_to_glsl(ret_attr.?))
+                        writef("%v = ", attribute_to_glsl(ret_attr.?, ast, shader_type))
                         codegen_expr(stmt.expr)
                     }
                     else
@@ -335,15 +332,32 @@ type_to_glsl :: proc(type: ^Ast_Type) -> string
     return ""
 }
 
-attribute_to_glsl :: proc(attribute: Ast_Attribute) -> string
+attribute_to_glsl :: proc(attribute: Ast_Attribute, ast: Ast, shader_type: Shader_Type) -> string
 {
     val_str := runtime.cstring_to_string(fmt.caprint(attribute.arg, allocator = context.allocator))
 
     switch attribute.type
     {
-        case .Vert_ID:  return "gl_VertexIndex"
-        case .Position: return "gl_Position"
-        case .Data:     return "_res_data_"
+        case .Vert_ID:       return "gl_VertexIndex"
+        case .Position:     return "gl_Position"
+        case .Data:          
+            // Data comes from push constants: _res_vert_data_ for vertex shader, _res_frag_data_ for fragment shader
+            if shader_type == .Vertex {
+                return "_res_vert_data_"
+            } else {
+                return "_res_frag_data_"
+            }
+        case .Instance_ID:  return "gl_InstanceID"
+        case .Draw_ID:       return "gl_DrawID"
+        case .Indirect_Data:
+        {
+            // Indirect data comes from push constants: pointer to start of array, indexed by gl_DrawID
+            if ast.used_indirect_data_type != nil {
+                indirect_data_name := "_res_vert_indirect_data_" if shader_type == .Vertex else "_res_frag_indirect_data_"
+                return strings.concatenate({indirect_data_name, "[gl_DrawID]"})
+            }
+            return "_res_indirect_data_[gl_DrawID]"
+        }
         case .Out_Loc:  return strings.concatenate({"_res_out_loc", val_str, "_"})
         case .In_Loc:   return strings.concatenate({"_res_in_loc", val_str, "_"})
     }
