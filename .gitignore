@@ -2,3 +2,4 @@
 *.pdb
 *.rdi
 *.raddbg_project
+*.glsl
