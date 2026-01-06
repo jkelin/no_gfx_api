@@ -63,10 +63,10 @@ main :: proc()
 
     verts_local := gpu.mem_alloc_typed_gpu(Vertex, 3)
     indices_local := gpu.mem_alloc_typed_gpu(u32, 3)
-    
+
     indirect_command_cpu_mem := gpu.mem_alloc_typed(gpu.Draw_Indexed_Indirect_Command, 1)
     defer gpu.mem_free_typed(indirect_command_cpu_mem)
-    
+
     // Initialize indirect command
     indirect_command_cpu_mem[0] = gpu.Draw_Indexed_Indirect_Command {
         index_count = 3,
@@ -75,10 +75,10 @@ main :: proc()
         vertex_offset = 0,
         first_instance = 0,
     }
-    
+
     // Get GPU pointer for indirect command (CPU-visible memory is GPU-accessible)
     indirect_command := gpu.host_to_device_ptr(raw_data(indirect_command_cpu_mem))
-    
+
     defer {
         gpu.mem_free(verts_local)
         gpu.mem_free(indices_local)
@@ -125,7 +125,7 @@ main :: proc()
         cmd_buf := gpu.commands_begin(queue)
         gpu.cmd_begin_render_pass(cmd_buf, {
             color_attachments = {
-                { view = swapchain, clear_color = changing_color(delta_time) }
+                { texture = swapchain, clear_color = changing_color(delta_time) }
             }
         })
         gpu.cmd_set_shaders(cmd_buf, vert_shader, frag_shader)

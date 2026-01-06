@@ -17,14 +17,13 @@ Command_Buffer :: distinct Handle
 Queue :: distinct Handle
 Semaphore :: distinct Handle
 Shader :: distinct Handle
-Texture_View_Handle :: vk.ImageView  // @tmp
 Texture_Descriptor :: struct { bytes: [4]u64 }
 Sampler_Descriptor :: struct { bytes: [2]u64 }
 
 // Enums
 Memory :: enum { Default = 0, GPU, Readback }
 Texture_Type :: enum { D2 = 0, D3, D1 }
-Texture_Format :: enum { None = 0, RGBA8_Unorm, D32_Float }
+Texture_Format :: enum { Default = 0, RGBA8_Unorm, BGRA8_Unorm, D32_Float }
 Usage :: enum { Sampled = 0, Storage, Color_Attachment, Depth_Stencil_Attachment }
 Usage_Flags :: bit_set[Usage; u32]
 Shader_Type :: enum { Vertex = 0, Fragment }
@@ -72,7 +71,7 @@ Sampler_Desc :: struct
 Texture_View_Desc :: struct
 {
     type: Texture_Type,
-    format: Texture_Format,
+    format: Texture_Format,  // .Default = inherits the texture's format
     base_mip: u32,
     mip_count: u8,     // 0 = All_Mips
     base_layer: u16,
@@ -81,12 +80,11 @@ Texture_View_Desc :: struct
 
 Render_Attachment :: struct
 {
-    view:         Texture_View,
-    load_op:      Load_Op,
-    store_op:     Store_Op,
-    clear_color:  [4]f32,
-    //resolve_mode: ResolveModeFlags,
-    //resolve_view: ImageView,
+    texture: Texture,
+    view: Texture_View_Desc,
+    load_op: Load_Op,
+    store_op: Store_Op,
+    clear_color: [4]f32,
 }
 
 Render_Pass_Desc :: struct
@@ -105,13 +103,6 @@ Texture :: struct #all_or_none
     dimensions: [3]u32,
     format: Texture_Format,
     handle: Texture_Handle
-}
-
-Texture_View :: struct
-{
-    width: u32,
-    height: u32,
-    handle: Texture_View_Handle,
 }
 
 Depth_State :: struct
@@ -146,7 +137,7 @@ Draw_Indexed_Indirect_Command :: struct {
 init: proc(window: ^sdl.Window, frames_in_flight: u32) : _init
 cleanup: proc() : _cleanup
 wait_idle: proc() : _wait_idle
-swapchain_acquire_next: proc() -> Texture_View : _swapchain_acquire_next  // Blocks CPU until at least one frame is available.
+swapchain_acquire_next: proc() -> Texture : _swapchain_acquire_next  // Blocks CPU until at least one frame is available.
 swapchain_present: proc(queue: Queue, sem_wait: Semaphore, wait_value: u64) : _swapchain_present
 
 // Memory

@@ -109,7 +109,7 @@ main :: proc()
         cmd_buf := gpu.commands_begin(queue)
         gpu.cmd_begin_render_pass(cmd_buf, {
             color_attachments = {
-                { view = swapchain, clear_color = changing_color(delta_time) }
+                { texture = swapchain, clear_color = changing_color(delta_time) }
             }
         })
         gpu.cmd_set_shaders(cmd_buf, vert_shader, frag_shader)

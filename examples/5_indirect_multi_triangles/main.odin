@@ -61,7 +61,7 @@ main :: proc()
 
     verts_local := gpu.mem_alloc_typed_gpu(Vertex, 3)
     indices_local := gpu.mem_alloc_typed_gpu(u32, 3)
-    
+
     indirect_command_cpu_mem := gpu.mem_alloc_typed(gpu.Draw_Indexed_Indirect_Command, Num_Triangles)
     defer gpu.mem_free_typed(indirect_command_cpu_mem)
 
@@ -80,24 +80,24 @@ main :: proc()
     }
 
     indirect_vert_data := gpu.arena_alloc_array(&arena, Indirect_VertData, Num_Triangles)
-    
+
     // Arrange triangles in a circle
     circle_radius: f32 = 0.6
     for i in 0..<Num_Triangles {
         angle := f32(i) / f32(Num_Triangles) * math.PI * 2.0
-        
+
         // Position on circle
         x := math.cos(angle) * circle_radius
         y := math.sin(angle) * circle_radius
-        
+
         // HSL color: hue varies around the circle (0-360 degrees), saturation and lightness fixed
         hue := angle / (math.PI * 2.0)  // 0.0 to 1.0
         saturation: f32 = 1.0
         lightness: f32 = 0.5
-        
+
         // Convert HSL to RGB
         rgb := hsl_to_rgb(hue, saturation, lightness)
-        
+
         indirect_vert_data.cpu[i].color = { rgb.x, rgb.y, rgb.z, 1.0 }
         indirect_vert_data.cpu[i].pos = { x, y, 0.0, 0.0 }
         indirect_vert_data.cpu[i].size = 0.1
@@ -163,7 +163,7 @@ main :: proc()
         cmd_buf := gpu.commands_begin(queue)
         gpu.cmd_begin_render_pass(cmd_buf, {
             color_attachments = {
-                { view = swapchain, clear_color = changing_color(delta_time) }
+                { texture = swapchain, clear_color = changing_color(delta_time) }
             }
         })
         gpu.cmd_set_shaders(cmd_buf, vert_shader, frag_shader)
@@ -234,9 +234,9 @@ hsl_to_rgb :: proc(h: f32, s: f32, l: f32) -> linalg.Vector3f32
     c := (1.0 - abs(2.0 * l - 1.0)) * s
     x := c * (1.0 - abs(math.mod(h * 6.0, 2.0) - 1.0))
     m := l - c / 2.0
-    
+
     r, g, b: f32
-    
+
     if h < 1.0/6.0 {
         r, g, b = c, x, 0.0
     } else if h < 2.0/6.0 {
@@ -250,6 +250,6 @@ hsl_to_rgb :: proc(h: f32, s: f32, l: f32) -> linalg.Vector3f32
     } else {
         r, g, b = c, 0.0, x
     }
-    
+
     return { r + m, g + m, b + m }
 }

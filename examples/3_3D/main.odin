@@ -100,7 +100,7 @@ main :: proc()
         cmd_buf := gpu.commands_begin(queue)
         gpu.cmd_begin_render_pass(cmd_buf, {
             color_attachments = {
-                { view = swapchain, clear_color = { 0.7, 0.7, 0.7, 1.0 } }
+                { texture = swapchain, clear_color = { 0.7, 0.7, 0.7, 1.0 } }
             }
         })
         gpu.cmd_set_shaders(cmd_buf, vert_shader, frag_shader)

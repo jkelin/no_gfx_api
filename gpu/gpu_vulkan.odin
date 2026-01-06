@@ -515,7 +515,7 @@ _wait_idle :: proc()
     vk.DeviceWaitIdle(ctx.device)
 }
 
-_swapchain_acquire_next :: proc() -> Texture_View
+_swapchain_acquire_next :: proc() -> Texture
 {
     fence_ci := vk.FenceCreateInfo { sType = .FENCE_CREATE_INFO }
     fence: vk.Fence
@@ -562,10 +562,10 @@ _swapchain_acquire_next :: proc() -> Texture_View
         vk_submit_cmd_buf(ctx.queue, cmd_buf)
     }
 
-    return Texture_View {
-        width = ctx.swapchain.width,
-        height = ctx.swapchain.height,
-        handle = ctx.swapchain.image_views[ctx.swapchain_image_idx],
+    return Texture {
+        dimensions = { ctx.swapchain.width, ctx.swapchain.height, 1 },
+        format = .BGRA8_Unorm,
+        handle = transmute(Texture_Handle) ctx.swapchain.images[ctx.swapchain_image_idx],
     }
 }
 
@@ -935,11 +935,16 @@ _texture_view_descriptor :: proc(texture: Texture, view_desc: Texture_View_Desc)
 {
     vk_image := transmute(vk.Image) texture.handle
 
+    format := view_desc.format
+    if format == .Default {
+        format = texture.format
+    }
+
     image_view_ci := vk.ImageViewCreateInfo {
         sType = .IMAGE_VIEW_CREATE_INFO,
         image = vk_image,
         viewType = to_vk_texture_view_type(view_desc.type),
-        format = to_vk_texture_format(view_desc.format),
+        format = to_vk_texture_format(format),
         subresourceRange = {
             aspectMask = { .COLOR },
             levelCount = 1,
@@ -1327,11 +1332,11 @@ _cmd_begin_render_pass :: proc(cmd_buf: Command_Buffer, desc: Render_Pass_Desc)
 
     width := desc.render_area_size.x
     if width == {} {
-        width = desc.color_attachments[0].view.width
+        width = desc.color_attachments[0].texture.dimensions.x
     }
     height := desc.render_area_size.y
     if height == {} {
-        height = desc.color_attachments[0].view.height
+        height = desc.color_attachments[0].texture.dimensions.y
     }
     layer_count := desc.layer_count
     if layer_count == 0 {
@@ -1454,7 +1459,7 @@ _cmd_draw_indexed_instanced_indirect :: proc(cmd_buf: Command_Buffer, vertex_dat
 
 @(private="file")
 _cmd_draw_indexed_instanced_indirect_multi_impl :: proc(cmd_buf: Command_Buffer, data_vertex: rawptr, data_pixel: rawptr,
-                                                         indices: rawptr, arguments: rawptr, draw_count: rawptr, 
+                                                         indices: rawptr, arguments: rawptr, draw_count: rawptr,
                                                          data_vertex_shared: rawptr, data_pixel_shared: rawptr)
 {
     vk_cmd_buf := cast(vk.CommandBuffer) cmd_buf
@@ -1487,7 +1492,7 @@ _cmd_draw_indexed_instanced_indirect_multi_impl :: proc(cmd_buf: Command_Buffer,
 
     vk.CmdBindIndexBuffer(vk_cmd_buf, indices_buf, vk.DeviceSize(indices_offset), .UINT32)
     stride := u32(size_of(vk.DrawIndexedIndirectCommand))
-    
+
     max_draw_count: u32 = 0xFFFFFFFF
     buf_size, ok_size := get_buf_size_from_gpu_ptr(arguments)
     if ok_size && buf_size > vk.DeviceSize(arguments_offset)
@@ -1705,6 +1710,14 @@ create_swapchain :: proc(width: u32, height: u32, frames_in_flight: u32) -> Swap
 @(private="file")
 destroy_swapchain :: proc(swapchain: Swapchain)
 {
+    for image in swapchain.images
+    {
+        views := &ctx.image_views[image]
+        for view in views {
+            vk.DestroyImageView(ctx.device, view.view, nil)
+        }
+    }
+
     delete(swapchain.images)
     for semaphore in swapchain.present_semaphores {
         vk.DestroySemaphore(ctx.device, semaphore, nil)
@@ -1921,9 +1934,31 @@ to_vk_compare_op :: #force_inline proc(compare_op: Compare_Op) -> vk.CompareOp
 @(private="file")
 to_vk_render_attachment :: #force_inline proc(attach: Render_Attachment) -> vk.RenderingAttachmentInfo
 {
+    view_desc := attach.view
+    texture := attach.texture
+    vk_image := transmute(vk.Image) texture.handle
+
+    format := view_desc.format
+    if format == .Default {
+        format = attach.texture.format
+    }
+
+    image_view_ci := vk.ImageViewCreateInfo {
+        sType = .IMAGE_VIEW_CREATE_INFO,
+        image = vk_image,
+        viewType = to_vk_texture_view_type(view_desc.type),
+        format = to_vk_texture_format(format),
+        subresourceRange = {
+            aspectMask = { .COLOR },
+            levelCount = 1,
+            layerCount = 1,
+        }
+    }
+    view := get_or_add_image_view(vk_image, image_view_ci)
+
     return {
         sType = .RENDERING_ATTACHMENT_INFO,
-        imageView = attach.view.handle,
+        imageView = view,
         imageLayout = .GENERAL,
         loadOp = to_vk_load_op(attach.load_op),
         storeOp = to_vk_store_op(attach.store_op),
@@ -1959,8 +1994,9 @@ to_vk_texture_format :: proc(format: Texture_Format) -> vk.Format
 {
     switch format
     {
-        case .None: return .UNDEFINED
+        case .Default: return .UNDEFINED
         case .RGBA8_Unorm: return .R8G8B8A8_UNORM
+        case .BGRA8_Unorm: return .B8G8R8A8_UNORM
         case .D32_Float: return .D32_SFLOAT
     }
     return {}
