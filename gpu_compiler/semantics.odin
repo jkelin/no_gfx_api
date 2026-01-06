@@ -56,6 +56,12 @@ typecheck_ast :: proc(ast: Ast, input_path: string, allocator: runtime.Allocator
                     typecheck_error(&c, decl.token, "Variable declared with '@data' attribute must be of pointer or slice type.")
                 }
             }
+            if decl.attr != nil && decl.attr.?.type == .Indirect_Data
+            {
+                if decl.type.kind != .Pointer && decl.type.kind != .Slice {
+                    typecheck_error(&c, decl.token, "Variable declared with '@indirect_data' attribute must be of pointer or slice type.")
+                }
+            }
         }
 
         old_scope := c.scope

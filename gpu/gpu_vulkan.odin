@@ -12,7 +12,7 @@ import sdl "vendor:sdl3"
 import vk "vendor:vulkan"
 import "vma"
 
-Push_Constant_Size :: size_of(rawptr) * 2
+Push_Constant_Size :: size_of(rawptr) * 4  // Max: vert_data, frag_data, vert_indirect_data, frag_indirect_data
 Max_Textures :: 65535
 
 @(private="file")
@@ -22,6 +22,7 @@ GPU_Alloc_Meta :: struct #all_or_none
     allocation: vma.Allocation,
     device_address: vk.DeviceAddress,
     align: u32,
+    buf_size: vk.DeviceSize,
 }
 
 @(private="file")
@@ -79,6 +80,8 @@ Context :: struct
     textures_desc_layout: vk.DescriptorSetLayout,
     textures_rw_desc_layout: vk.DescriptorSetLayout,
     samplers_desc_layout: vk.DescriptorSetLayout,
+    data_desc_layout: vk.DescriptorSetLayout,
+    indirect_data_desc_layout: vk.DescriptorSetLayout,
     common_pipeline_layout: vk.PipelineLayout,
 
     // Descriptor objects
@@ -257,6 +260,7 @@ _init :: proc(window: ^sdl.Window, frames_in_flight: u32)
         vk.KHR_SWAPCHAIN_EXTENSION_NAME,
         vk.EXT_SHADER_OBJECT_EXTENSION_NAME,
         vk.EXT_DESCRIPTOR_BUFFER_EXTENSION_NAME,
+        vk.KHR_DRAW_INDIRECT_COUNT_EXTENSION_NAME,
     }
 
     next: rawptr
@@ -267,6 +271,12 @@ _init :: proc(window: ^sdl.Window, frames_in_flight: u32)
         shaderSampledImageArrayNonUniformIndexing = true,
         timelineSemaphore = true,
         bufferDeviceAddress = true,
+        drawIndirectCount = true,
+    }
+    next = &vk.PhysicalDeviceVulkan11Features {
+        sType = .PHYSICAL_DEVICE_VULKAN_1_1_FEATURES,
+        pNext = next,
+        shaderDrawParameters = true,
     }
     next = &vk.PhysicalDeviceVulkan13Features {
         sType = .PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
@@ -294,6 +304,7 @@ _init :: proc(window: ^sdl.Window, frames_in_flight: u32)
         pNext = next,
         features = {
             shaderInt64 = true,
+            vertexPipelineStoresAndAtomics = true,
         }
     }
 
@@ -395,11 +406,41 @@ _init :: proc(window: ^sdl.Window, frames_in_flight: u32)
             }
             vk_check(vk.CreateDescriptorSetLayout(ctx.device, &layout_ci, nil, &ctx.samplers_desc_layout))
         }
+        {
+            layout_ci := vk.DescriptorSetLayoutCreateInfo {
+                sType = .DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+                flags = { .DESCRIPTOR_BUFFER_EXT },
+                bindingCount = 1,
+                pBindings = &vk.DescriptorSetLayoutBinding {
+                    binding = 0,
+                    descriptorType = .STORAGE_BUFFER,
+                    descriptorCount = 1,
+                    stageFlags = { .VERTEX, .FRAGMENT },
+                },
+            }
+            vk_check(vk.CreateDescriptorSetLayout(ctx.device, &layout_ci, nil, &ctx.data_desc_layout))
+        }
+        {
+            layout_ci := vk.DescriptorSetLayoutCreateInfo {
+                sType = .DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+                flags = { .DESCRIPTOR_BUFFER_EXT },
+                bindingCount = 1,
+                pBindings = &vk.DescriptorSetLayoutBinding {
+                    binding = 0,
+                    descriptorType = .STORAGE_BUFFER,
+                    descriptorCount = 1,
+                    stageFlags = { .VERTEX, .FRAGMENT },
+                },
+            }
+            vk_check(vk.CreateDescriptorSetLayout(ctx.device, &layout_ci, nil, &ctx.indirect_data_desc_layout))
+        }
 
         desc_layouts := []vk.DescriptorSetLayout {
             ctx.textures_desc_layout,
             ctx.textures_rw_desc_layout,
             ctx.samplers_desc_layout,
+            ctx.data_desc_layout,
+            ctx.indirect_data_desc_layout,
         }
         pipeline_layout_ci := vk.PipelineLayoutCreateInfo {
             sType = .PIPELINE_LAYOUT_CREATE_INFO,
@@ -460,6 +501,8 @@ _cleanup :: proc()
     vk.DestroyDescriptorSetLayout(ctx.device, ctx.textures_desc_layout, nil)
     vk.DestroyDescriptorSetLayout(ctx.device, ctx.textures_rw_desc_layout, nil)
     vk.DestroyDescriptorSetLayout(ctx.device, ctx.samplers_desc_layout, nil)
+    vk.DestroyDescriptorSetLayout(ctx.device, ctx.data_desc_layout, nil)
+    vk.DestroyDescriptorSetLayout(ctx.device, ctx.indirect_data_desc_layout, nil)
     vk.DestroyPipelineLayout(ctx.device, ctx.common_pipeline_layout, nil)
 
     vma.destroy_allocator(ctx.vma_allocator)
@@ -652,9 +695,9 @@ _mem_alloc :: proc(bytes: u64, align: u64 = 1, mem_type := Memory.Default) -> ra
 
     buf_usage: vk.BufferUsageFlags
     if mem_type == .GPU {
-        buf_usage = { .SHADER_DEVICE_ADDRESS, .INDEX_BUFFER, .STORAGE_BUFFER, .TRANSFER_DST }
+        buf_usage = { .SHADER_DEVICE_ADDRESS, .INDEX_BUFFER, .STORAGE_BUFFER, .TRANSFER_DST, .INDIRECT_BUFFER, .RESOURCE_DESCRIPTOR_BUFFER_EXT }
     } else {
-        buf_usage = { .RESOURCE_DESCRIPTOR_BUFFER_EXT, .SHADER_DEVICE_ADDRESS, .STORAGE_BUFFER, .TRANSFER_SRC }
+        buf_usage = { .RESOURCE_DESCRIPTOR_BUFFER_EXT, .SHADER_DEVICE_ADDRESS, .STORAGE_BUFFER, .TRANSFER_SRC, .INDIRECT_BUFFER }
     }
     buf_ci := vk.BufferCreateInfo {
         sType = .BUFFER_CREATE_INFO,
@@ -694,6 +737,7 @@ _mem_alloc :: proc(bytes: u64, align: u64 = 1, mem_type := Memory.Default) -> ra
         buf_handle = buf,
         device_address = addr,
         align = u32(align),
+        buf_size = cast(vk.DeviceSize) bytes,
     })
     gpu_alloc_idx := u32(len(ctx.gpu_allocs)) - 1
     ctx.gpu_ptr_to_alloc[addr_ptr] = gpu_alloc_idx
@@ -986,6 +1030,8 @@ _shader_create :: proc(code: []u32, type: Shader_Type) -> Shader
         ctx.textures_desc_layout,
         ctx.textures_rw_desc_layout,
         ctx.samplers_desc_layout,
+        ctx.data_desc_layout,
+        ctx.indirect_data_desc_layout,
     }
 
     shader_cis := vk.ShaderCreateInfoEXT {
@@ -1369,12 +1415,101 @@ _cmd_draw_indexed_instanced :: proc(cmd_buf: Command_Buffer, vertex_data: rawptr
         return
     }
 
-    ptrs := []rawptr { vertex_data, fragment_data }
+    // Push constants: vert_data, frag_data, vert_indirect_data, frag_indirect_data
+    ptrs := []rawptr { vertex_data, fragment_data, vertex_data, fragment_data }
     assert(Push_Constant_Size == len(ptrs) * size_of(ptrs[0]))
     vk.CmdPushConstants(vk_cmd_buf, ctx.common_pipeline_layout, { .VERTEX, .FRAGMENT }, 0, Push_Constant_Size, raw_data(ptrs))
 
     vk.CmdBindIndexBuffer(vk_cmd_buf, indices_buf, vk.DeviceSize(indices_offset), .UINT32)
     vk.CmdDrawIndexed(vk_cmd_buf, index_count, instance_count, 0, 0, 0)
+}
+
+_cmd_draw_indexed_instanced_indirect :: proc(cmd_buf: Command_Buffer, vertex_data: rawptr, fragment_data: rawptr,
+                                            indices: rawptr, arguments: rawptr)
+{
+    vk_cmd_buf := cast(vk.CommandBuffer) cmd_buf
+
+    indices_buf, indices_offset, ok_i := compute_buf_offset_from_gpu_ptr(indices)
+    if !ok_i
+    {
+        log.error("Indices alloc not found")
+        return
+    }
+
+    arguments_buf, arguments_offset, ok_a := compute_buf_offset_from_gpu_ptr(arguments)
+    if !ok_a
+    {
+        log.error("Arguments alloc not found")
+        return
+    }
+
+    // Push constants: vert_data, frag_data, vert_indirect_data, frag_indirect_data
+    ptrs := []rawptr { vertex_data, fragment_data, vertex_data, fragment_data }
+    assert(Push_Constant_Size == len(ptrs) * size_of(ptrs[0]))
+    vk.CmdPushConstants(vk_cmd_buf, ctx.common_pipeline_layout, { .VERTEX, .FRAGMENT }, 0, Push_Constant_Size, raw_data(ptrs))
+
+    vk.CmdBindIndexBuffer(vk_cmd_buf, indices_buf, vk.DeviceSize(indices_offset), .UINT32)
+    vk.CmdDrawIndexedIndirect(vk_cmd_buf, arguments_buf, vk.DeviceSize(arguments_offset), 1, 0)
+}
+
+@(private="file")
+_cmd_draw_indexed_instanced_indirect_multi_impl :: proc(cmd_buf: Command_Buffer, data_vertex: rawptr, data_pixel: rawptr,
+                                                         indices: rawptr, arguments: rawptr, draw_count: rawptr, 
+                                                         data_vertex_shared: rawptr, data_pixel_shared: rawptr)
+{
+    vk_cmd_buf := cast(vk.CommandBuffer) cmd_buf
+
+    indices_buf, indices_offset, ok_i := compute_buf_offset_from_gpu_ptr(indices)
+    if !ok_i
+    {
+        log.error("Indices alloc not found")
+        return
+    }
+
+    arguments_buf, arguments_offset, ok_a := compute_buf_offset_from_gpu_ptr(arguments)
+    if !ok_a
+    {
+        log.error("Arguments alloc not found")
+        return
+    }
+
+    draw_count_buf, draw_count_offset, ok_dc := compute_buf_offset_from_gpu_ptr(draw_count)
+    if !ok_dc
+    {
+        log.error("Draw count alloc not found")
+        return
+    }
+
+    // Push constants contain: vert_data, frag_data, vert_indirect_data, frag_indirect_data
+    ptrs := []rawptr { data_vertex_shared, data_pixel_shared, data_vertex, data_pixel }
+    assert(Push_Constant_Size == len(ptrs) * size_of(ptrs[0]))
+    vk.CmdPushConstants(vk_cmd_buf, ctx.common_pipeline_layout, { .VERTEX, .FRAGMENT }, 0, Push_Constant_Size, raw_data(ptrs))
+
+    vk.CmdBindIndexBuffer(vk_cmd_buf, indices_buf, vk.DeviceSize(indices_offset), .UINT32)
+    stride := u32(size_of(vk.DrawIndexedIndirectCommand))
+    
+    max_draw_count: u32 = 0xFFFFFFFF
+    buf_size, ok_size := get_buf_size_from_gpu_ptr(arguments)
+    if ok_size && buf_size > vk.DeviceSize(arguments_offset)
+    {
+        available_size := buf_size - vk.DeviceSize(arguments_offset)
+        max_draw_count = u32(available_size / vk.DeviceSize(stride))
+    }
+
+    vk.CmdDrawIndexedIndirectCount(vk_cmd_buf, arguments_buf, vk.DeviceSize(arguments_offset), draw_count_buf, vk.DeviceSize(draw_count_offset), max_draw_count, stride)
+}
+
+_cmd_draw_indexed_instanced_indirect_multi :: proc(cmd_buf: Command_Buffer, data_vertex: rawptr, data_pixel: rawptr,
+                                                    indices: rawptr, arguments: rawptr, draw_count: rawptr)
+{
+    _cmd_draw_indexed_instanced_indirect_multi_impl(cmd_buf, data_vertex, data_pixel, indices, arguments, draw_count, data_vertex, data_pixel)
+}
+
+_cmd_draw_indexed_instanced_indirect_multi_data :: proc(cmd_buf: Command_Buffer, data_vertex: rawptr, data_pixel: rawptr,
+                                                         indices: rawptr, arguments: rawptr, draw_count: rawptr, data_vertex_shared: rawptr,
+                                                         data_pixel_shared: rawptr)
+{
+    _cmd_draw_indexed_instanced_indirect_multi_impl(cmd_buf, data_vertex, data_pixel, indices, arguments, draw_count, data_vertex_shared, data_pixel_shared)
 }
 
 @(private="file")
@@ -1612,6 +1747,17 @@ compute_buf_offset_from_gpu_ptr :: proc(ptr: rawptr) -> (buf: vk.Buffer, offset:
     buf = alloc.buf_handle
     offset = u32(uintptr(ptr) - uintptr(alloc.device_address))
     return buf, offset, true
+}
+
+@(private="file")
+get_buf_size_from_gpu_ptr :: proc(ptr: rawptr) -> (size: vk.DeviceSize, ok: bool)
+{
+    alloc_idx, ok_s := search_alloc_from_gpu_ptr(ptr)
+    if !ok_s do return 0, false
+
+    // Get actual buffer size from metadata (not allocation size, which may be larger due to alignment)
+    alloc := ctx.gpu_allocs[alloc_idx]
+    return alloc.buf_size, true
 }
 
 // Command buffers
