@@ -1,0 +1,3 @@
+[submodule "examples/6_imgui/odin-imgui"]
+	path = examples/6_imgui/odin-imgui
+	url = https://github.com/Capati/odin-imgui/

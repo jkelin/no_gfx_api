@@ -1118,6 +1118,42 @@ _get_queue :: proc() -> Queue
     return cast(Queue) ctx.queue
 }
 
+// Vulkan handle getters for external use (e.g., imgui integration)
+_get_vulkan_instance :: proc() -> vk.Instance
+{
+    return ctx.instance
+}
+
+_get_vulkan_physical_device :: proc() -> vk.PhysicalDevice
+{
+    return ctx.phys_device
+}
+
+_get_vulkan_device :: proc() -> vk.Device
+{
+    return ctx.device
+}
+
+_get_vulkan_queue :: proc() -> vk.Queue
+{
+    return ctx.queue
+}
+
+_get_vulkan_queue_family :: proc() -> u32
+{
+    return ctx.queue_family_idx
+}
+
+_get_vulkan_command_buffer :: proc(cmd_buf: Command_Buffer) -> vk.CommandBuffer
+{
+    return cast(vk.CommandBuffer) cmd_buf
+}
+
+_get_swapchain_image_count :: proc() -> u32
+{
+    return u32(len(ctx.swapchain.images))
+}
+
 _commands_begin :: proc(queue: Queue) -> Command_Buffer
 {
     vk_queue := cast(vk.Queue) queue

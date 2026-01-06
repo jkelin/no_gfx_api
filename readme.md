@@ -133,6 +133,38 @@ main :: (vert_id: uint @vert_id, data: ^Data @data) -> Output
 
 The compiler itself just transpiles to GLSL.
 
-## Build
-Simply use `build.bat` or `build.sh` to build all the examples.
+
+## Building (Windows)
+
+- Update git submodules:
+
+```bash
+git submodule update --init --recursive
+```
+
+- Build Odin VMA, refer to [Odin VMA README](gpu/vma/README.md) for more details.
+- [for example 6] Build ImGui, refer to [ImGui README](examples/6_imgui/odin-imgui/README.md) for more details.
+- Build compiler
+
+```bash
+odin build gpu_compiler -debug -out=build/gpu_compiler.exe
+```
+
+- Build example shaders:
+
+```bash
+examples/build_shaders.bat
+```
+
+- Build examples:
+
+```bash
+examples/build.bat
+```
+- Or run them directly:
+
+```bash
+odin run examples/1_triangle -debug -out=build/1_triangle.exe
+```
+
 Feel free to [contact me on discord](https://discord.com/users/leon2058) for any questions.
