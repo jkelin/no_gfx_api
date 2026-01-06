@@ -43,6 +43,17 @@ main :: proc()
     gpu.init(window, Frames_In_Flight)
     defer gpu.cleanup()
 
+    dim := [3]u32 {  }
+    depth_texture := gpu.alloc_and_create_texture({
+        dimensions = { Window_Size_X, Window_Size_Y, 1 },
+        format = .D32_Float,
+        mip_count = 1,
+        layer_count = 1,
+        sample_count = 1,
+        usage = { .Depth_Stencil_Attachment },
+    })
+    defer gpu.free_and_destroy_texture(&depth_texture)
+
     vert_shader := gpu.shader_create(#load("shaders/test.vert.spv", []u32), .Vertex)
     frag_shader := gpu.shader_create(#load("shaders/test.frag.spv", []u32), .Fragment)
     defer {
@@ -101,9 +112,14 @@ main :: proc()
         gpu.cmd_begin_render_pass(cmd_buf, {
             color_attachments = {
                 { texture = swapchain, clear_color = { 0.7, 0.7, 0.7, 1.0 } }
-            }
+            },
+            depth_attachment = gpu.Render_Attachment {
+                texture = depth_texture, clear_color = 1.0
+            },
         })
         gpu.cmd_set_shaders(cmd_buf, vert_shader, frag_shader)
+
+        gpu.cmd_set_depth_state(cmd_buf, { mode = { .Read, .Write }, compare = .Less })
 
         for instance in scene.instances
         {
@@ -295,9 +311,9 @@ handle_window_events :: proc(window: ^sdl.Window) -> (proceed: bool)
 
 first_person_camera_view :: proc(delta_time: f32) -> matrix[4, 4]f32
 {
-    @(static) cam_pos: [3]f32 = { 0, 2.5, -10 }
+    @(static) cam_pos: [3]f32 = { -7.581631, 1.1906259, 0.25928685 }
 
-    @(static) angle: [2]f32
+    @(static) angle: [2]f32 = { 1.570796, 0.3665192 }
 
     cam_rot: quaternion128 = 1
 

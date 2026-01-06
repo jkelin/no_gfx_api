@@ -819,6 +819,8 @@ _texture_create :: proc(desc: Texture_Desc, storage: rawptr, signal_sem: Semapho
         initialLayout = .UNDEFINED,
     }, &image))
 
+    plane_aspect: vk.ImageAspectFlags = { .DEPTH } if desc.format == .D32_Float else { .COLOR }
+
     // Transition layout from UNDEFINED to GENERAL
     {
         cmd_buf := vk_acquire_cmd_buf(ctx.queue)
@@ -833,7 +835,7 @@ _texture_create :: proc(desc: Texture_Desc, storage: rawptr, signal_sem: Semapho
             sType = .IMAGE_MEMORY_BARRIER_2,
             image = image,
             subresourceRange = {
-                aspectMask = { .COLOR },
+                aspectMask = plane_aspect,
                 levelCount = 1,
                 layerCount = 1,
             },
@@ -888,10 +890,12 @@ _texture_size_and_align :: proc(desc: Texture_Desc) -> (size: u64, align: u64)
         initialLayout = .UNDEFINED,
     }
 
+    plane_aspect: vk.ImageAspectFlags = { .DEPTH } if desc.format == .D32_Float else { .COLOR }
+
     info := vk.DeviceImageMemoryRequirements {
         sType = .DEVICE_IMAGE_MEMORY_REQUIREMENTS,
         pCreateInfo = &image_ci,
-        planeAspect = { .COLOR },
+        planeAspect = plane_aspect,
     }
 
     mem_requirements_2 := vk.MemoryRequirements2 { sType = .MEMORY_REQUIREMENTS_2 }
@@ -940,13 +944,15 @@ _texture_view_descriptor :: proc(texture: Texture, view_desc: Texture_View_Desc)
         format = texture.format
     }
 
+    plane_aspect: vk.ImageAspectFlags = { .DEPTH } if format == .D32_Float else { .COLOR }
+
     image_view_ci := vk.ImageViewCreateInfo {
         sType = .IMAGE_VIEW_CREATE_INFO,
         image = vk_image,
         viewType = to_vk_texture_view_type(view_desc.type),
         format = to_vk_texture_format(format),
         subresourceRange = {
-            aspectMask = { .COLOR },
+            aspectMask = plane_aspect,
             levelCount = 1,
             layerCount = 1,
         }
@@ -1176,12 +1182,14 @@ _cmd_copy_to_texture :: proc(cmd_buf: Command_Buffer, texture: Texture, src, dst
         return
     }
 
+    plane_aspect: vk.ImageAspectFlags = { .DEPTH } if texture.format == .D32_Float else { .COLOR }
+
     vk.CmdCopyBufferToImage(vk_cmd_buf, src_buf, vk_image, .GENERAL, 1, &vk.BufferImageCopy {
         bufferOffset = vk.DeviceSize(src_offset),
         bufferRowLength = texture.dimensions.x,
         bufferImageHeight = texture.dimensions.y,
         imageSubresource = {
-            aspectMask = { .COLOR },
+            aspectMask = plane_aspect,
             mipLevel = 0,
             baseArrayLayer = 0,
             layerCount = 1,
@@ -1943,13 +1951,15 @@ to_vk_render_attachment :: #force_inline proc(attach: Render_Attachment) -> vk.R
         format = attach.texture.format
     }
 
+    plane_aspect: vk.ImageAspectFlags = { .DEPTH } if format == .D32_Float else { .COLOR }
+
     image_view_ci := vk.ImageViewCreateInfo {
         sType = .IMAGE_VIEW_CREATE_INFO,
         image = vk_image,
         viewType = to_vk_texture_view_type(view_desc.type),
         format = to_vk_texture_format(format),
         subresourceRange = {
-            aspectMask = { .COLOR },
+            aspectMask = plane_aspect,
             levelCount = 1,
             layerCount = 1,
         }
@@ -1994,7 +2004,7 @@ to_vk_texture_format :: proc(format: Texture_Format) -> vk.Format
 {
     switch format
     {
-        case .Default: return .UNDEFINED
+        case .Default: panic("Implementation bug!")
         case .RGBA8_Unorm: return .R8G8B8A8_UNORM
         case .BGRA8_Unorm: return .B8G8R8A8_UNORM
         case .D32_Float: return .D32_SFLOAT
@@ -2006,6 +2016,7 @@ to_vk_sample_count :: proc(sample_count: u32) -> vk.SampleCountFlags
 {
     switch sample_count
     {
+        case 0: return { ._1 }
         case 1: return { ._1 }
         case 2: return { ._2 }
         case 4: return { ._4 }
