@@ -1,7 +1,7 @@
 
 Vertex :: struct
 {
-    pos: vec4,
+    pos: vec3,
 }
 
 Data :: struct
@@ -11,8 +11,8 @@ Data :: struct
 
 IndirectData :: struct
 {
-    color: vec4,
-    pos: vec4,
+    color: vec3,
+    pos: vec3,
     size: float,
 }
 
@@ -25,13 +25,13 @@ Output :: struct
 main :: (vert_id: uint @vert_id, data: ^Data @data, indirect_data: ^IndirectData @indirect_data) -> Output
 {
     vert_out: Output;
-    
+
     // vertices are shared between all draws so we use `data` to access them
     // Scale vertices by size and translate by position
-    vert_out.pos = vec4(data.verts[vert_id].pos.xyz * indirect_data.size + indirect_data.pos.xyz, 1.0);
+    vert_out.pos = vec4(data.verts[vert_id].pos * indirect_data.size + indirect_data.pos, 1.0);
 
     // color is per-draw so we use `indirect_data` to access it
-    vert_out.color = indirect_data.color;
+    vert_out.color = vec4(indirect_data.color, 1.0);
 
     return vert_out;
 }

@@ -53,20 +53,20 @@ main :: proc()
     sampler_heap := gpu.mem_alloc(size_of(gpu.Sampler_Descriptor) * 10)
     defer gpu.mem_free(sampler_heap)
 
-    Vertex :: struct { pos: [4]f32, uv: [4]f32 }
+    Vertex :: struct { pos: [3]f32, uv: [2]f32 }
 
     arena := gpu.arena_init(1024 * 1024)
     defer gpu.arena_destroy(&arena)
 
     verts := gpu.arena_alloc_array(&arena, Vertex, 4)
-    verts.cpu[0].pos = { -0.5,  0.5, 0.0, 0.0 }
-    verts.cpu[1].pos = {  0.5, -0.5, 0.0, 0.0 }
-    verts.cpu[2].pos = {  0.5,  0.5, 0.0, 0.0 }
-    verts.cpu[3].pos = { -0.5, -0.5, 0.0, 0.0 }
-    verts.cpu[0].uv  = {  0.0,  1.0, 0.0, 0.0 }
-    verts.cpu[1].uv  = {  1.0,  0.0, 0.0, 0.0 }
-    verts.cpu[2].uv  = {  1.0,  1.0, 0.0, 0.0 }
-    verts.cpu[3].uv  = {  0.0,  0.0, 0.0, 0.0 }
+    verts.cpu[0].pos = { -0.5,  0.5, 0.0 }
+    verts.cpu[1].pos = {  0.5, -0.5, 0.0 }
+    verts.cpu[2].pos = {  0.5,  0.5, 0.0 }
+    verts.cpu[3].pos = { -0.5, -0.5, 0.0 }
+    verts.cpu[0].uv  = {  0.0,  1.0 }
+    verts.cpu[1].uv  = {  1.0,  0.0 }
+    verts.cpu[2].uv  = {  1.0,  1.0 }
+    verts.cpu[3].uv  = {  0.0,  0.0 }
 
     indices := gpu.arena_alloc_array(&arena, u32, 6)
     indices.cpu[0] = 0

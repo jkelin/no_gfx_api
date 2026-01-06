@@ -1,8 +1,8 @@
 
 Vertex :: struct
 {
-    pos: vec4,
-    uv: vec4,
+    pos: vec3,
+    uv: vec2,
 }
 
 Data :: struct
@@ -20,6 +20,6 @@ main :: (vert_id: uint @vert_id, data: ^Data @data) -> Output
 {
     vert_out: Output;
     vert_out.pos = vec4(data.verts[vert_id].pos.xyz, 1.0);
-    vert_out.uv = vec2(data.verts[vert_id].uv.xy);
+    vert_out.uv = data.verts[vert_id].uv;
     return vert_out;
 }

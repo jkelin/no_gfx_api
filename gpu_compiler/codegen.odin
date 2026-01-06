@@ -89,34 +89,46 @@ codegen :: proc(ast: Ast, shader_type: Shader_Type, input_path: string, output_p
         }
     }
 
-    writefln("layout(buffer_reference, std140) readonly buffer _res_ptr_void {{ uint _res_void_; }};")
+    writefln("layout(buffer_reference, scalar) readonly buffer _res_ptr_void {{ uint _res_void_; }};")
     for &type in ast.used_types
     {
-        if type.kind == .Pointer || type.kind == .Slice {
-            writefln("layout(buffer_reference, std140) readonly buffer %v {{ %v _res_; }};", type_to_glsl(&type), type_to_glsl(type.base))
+        if type.kind == .Pointer {
+            writefln("layout(buffer_reference, scalar) readonly buffer %v {{ %v _res_; }};", type_to_glsl(&type), type_to_glsl(type.base))
+        }
+        if type.kind == .Slice {
+            writefln("layout(buffer_reference, scalar) readonly buffer %v {{ %v _res_[]; }};", type_to_glsl(&type), type_to_glsl(type.base))
         }
     }
 
+    if ast.used_indirect_data_type != nil
+    {
+        assert(ast.used_indirect_data_type.kind == .Pointer)
+        base := ast.used_indirect_data_type.base
+        writefln("layout(buffer_reference, scalar) readonly buffer _res_indirect_array_%v {{ %v _res_[]; }};", type_to_glsl(base), type_to_glsl(base))
+    }
     writeln("")
 
     // Generate bindings
     writeln("layout(set = 0, binding = 0) uniform texture2D _res_textures_[];")
     writeln("layout(set = 1, binding = 0) uniform writeonly image2D _res_textures_rw_[];")
     writeln("layout(set = 2, binding = 0) uniform sampler _res_samplers_[];")
-    
+
     writeln("")
 
     // Push constants always contain 4 pointers: vert_data, frag_data, vert_indirect_data, frag_indirect_data
+    indirect_data_type_glsl := "_res_ptr_void"
+    if ast.used_indirect_data_type != nil {
+        indirect_data_type_glsl = strings.concatenate({"_res_indirect_array_", type_to_glsl(ast.used_indirect_data_type.base)})
+    }
     data_type_str := type_to_glsl(ast.used_data_type) if ast.used_data_type != nil else "_res_ptr_void"
-    indirect_data_ptr_type_str := type_to_glsl(ast.used_indirect_data_type) if ast.used_indirect_data_type != nil else "_res_ptr_void"
-    
-    writeln("layout(push_constant, std140) uniform Push")
+
+    writeln("layout(push_constant, scalar) uniform Push")
     writeln("{")
     if writer_scope() {
         writefln("%v _res_vert_data_;", data_type_str)
         writefln("%v _res_frag_data_;", data_type_str)
-        writefln("%v _res_vert_indirect_data_;", indirect_data_ptr_type_str)
-        writefln("%v _res_frag_indirect_data_;", indirect_data_ptr_type_str)
+        writefln("%v _res_vert_indirect_data_;", indirect_data_type_glsl)
+        writefln("%v _res_frag_indirect_data_;", indirect_data_type_glsl)
     }
     writeln("};")
     writeln("")
@@ -145,10 +157,19 @@ codegen :: proc(ast: Ast, shader_type: Shader_Type, input_path: string, output_p
             // Declare all variables
             for var_decl in proc_def.scope.decls
             {
-                if var_decl.attr == nil {
+                if var_decl.attr == nil
+                {
                     writefln("%v %v;", type_to_glsl(var_decl.type), var_decl.name)
-                } else {
+                }
+                else
+                {
                     attr_glsl := attribute_to_glsl(var_decl.attr.?, ast, shader_type)
+                    if var_decl.attr.?.type == .Indirect_Data
+                    {
+                        // TODO: We just demote from pointer because on the GLSL side it's declared as value
+                        var_decl.type^ = var_decl.type.base^
+                    }
+
                     writefln("%v %v = %v;", type_to_glsl(var_decl.type), var_decl.name, attr_glsl)
                 }
             }
@@ -256,9 +277,9 @@ codegen_expr :: proc(expression: ^Ast_Expr)
         case ^Ast_Array_Access:
         {
             codegen_expr(expr.target)
-            write("[")
+            write("._res_[")
             codegen_expr(expr.idx_expr)
-            write("]._res_")
+            write("]")
         }
         case ^Ast_Call:
         {
@@ -340,7 +361,7 @@ attribute_to_glsl :: proc(attribute: Ast_Attribute, ast: Ast, shader_type: Shade
     {
         case .Vert_ID:       return "gl_VertexIndex"
         case .Position:     return "gl_Position"
-        case .Data:          
+        case .Data:
             // Data comes from push constants: _res_vert_data_ for vertex shader, _res_frag_data_ for fragment shader
             if shader_type == .Vertex {
                 return "_res_vert_data_"
@@ -354,9 +375,9 @@ attribute_to_glsl :: proc(attribute: Ast_Attribute, ast: Ast, shader_type: Shade
             // Indirect data comes from push constants: pointer to start of array, indexed by gl_DrawID
             if ast.used_indirect_data_type != nil {
                 indirect_data_name := "_res_vert_indirect_data_" if shader_type == .Vertex else "_res_frag_indirect_data_"
-                return strings.concatenate({indirect_data_name, "[gl_DrawID]"})
+                return strings.concatenate({indirect_data_name, "._res_[gl_DrawID]"})
             }
-            return "_res_indirect_data_[gl_DrawID]"
+            return "_res_indirect_data_._res_[gl_DrawID]"
         }
         case .Out_Loc:  return strings.concatenate({"_res_out_loc", val_str, "_"})
         case .In_Loc:   return strings.concatenate({"_res_in_loc", val_str, "_"})
@@ -400,6 +421,7 @@ write_preamble :: proc()
     writeln("#extension GL_EXT_buffer_reference : require")
     writeln("#extension GL_EXT_buffer_reference2 : require")
     writeln("#extension GL_EXT_nonuniform_qualifier : require")
+    writeln("#extension GL_EXT_scalar_block_layout : require")
     writeln("")
 }
 

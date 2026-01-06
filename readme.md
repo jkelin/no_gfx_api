@@ -107,8 +107,8 @@ For fun, I also whipped up a quick prototype of a shading language with decent p
 ```jai
 Vertex :: struct
 {
-    pos: vec4,
-    color: vec4
+    pos: vec3,
+    color: vec3
 }
 
 Data :: struct
@@ -126,7 +126,7 @@ main :: (vert_id: uint @vert_id, data: ^Data @data) -> Output
 {
     vert_out: Output;
     vert_out.pos = vec4(data.verts[vert_id].pos.xyz, 1.0);
-    vert_out.color = data.verts[vert_id].color;
+    vert_out.color = vec4(data.verts[vert_id].color, 1.0);
     return vert_out;
 }
 ```

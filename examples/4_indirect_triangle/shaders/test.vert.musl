@@ -1,8 +1,8 @@
 
 Vertex :: struct
 {
-    pos: vec4,
-    color: vec4
+    pos: vec3,
+    color: vec3
 }
 
 Data :: struct
@@ -23,7 +23,7 @@ main :: (vert_id: uint @vert_id, data: ^Data @data, indirect_data: ^Data @indire
     // you can use `indirect_data` to get data for the current draw, `data` is shared between all draws
     // this example has just a single draw, so both are the same
 
-    vert_out.pos = vec4(data.verts[vert_id].pos.xyz, 1.0);
-    vert_out.color = indirect_data.verts[vert_id].color;
+    vert_out.pos = vec4(data.verts[vert_id].pos, 1.0);
+    vert_out.color = vec4(indirect_data.verts[vert_id].color, 1.0);
     return vert_out;
 }

@@ -44,15 +44,15 @@ main :: proc()
         gpu.shader_destroy(&frag_shader)
     }
 
-    Vertex :: struct { pos: [4]f32 }
+    Vertex :: struct { pos: [3]f32 }
 
     arena := gpu.arena_init(1024 * 1024)
     defer gpu.arena_destroy(&arena)
 
     verts := gpu.arena_alloc_array(&arena, Vertex, 3)
-    verts.cpu[0].pos = { -0.5,  0.5, 0.0, 0.0 }
-    verts.cpu[1].pos = {  0.0, -0.5, 0.0, 0.0 }
-    verts.cpu[2].pos = {  0.5,  0.5, 0.0, 0.0 }
+    verts.cpu[0].pos = { -0.5,  0.5, 0.0 }
+    verts.cpu[1].pos = {  0.0, -0.5, 0.0 }
+    verts.cpu[2].pos = {  0.5,  0.5, 0.0 }
 
     indices := gpu.arena_alloc_array(&arena, u32, 3)
     indices.cpu[0] = 0
@@ -73,10 +73,9 @@ main :: proc()
     indirect_command := gpu.host_to_device_ptr(raw_data(indirect_command_cpu_mem))
 
     Indirect_VertData :: struct {
-        color: [4]f32,  // 16 bytes, offset 0
-        pos: [4]f32,     // 16 bytes, offset 16
-        size: f32,       // 4 bytes, offset 32
-        _padding: [3]f32, // 12 bytes padding to match std140 alignment (struct size = 48 bytes)
+        color: [3]f32,
+        pos: [3]f32,
+        size: f32,
     }
 
     indirect_vert_data := gpu.arena_alloc_array(&arena, Indirect_VertData, Num_Triangles)
@@ -98,8 +97,8 @@ main :: proc()
         // Convert HSL to RGB
         rgb := hsl_to_rgb(hue, saturation, lightness)
 
-        indirect_vert_data.cpu[i].color = { rgb.x, rgb.y, rgb.z, 1.0 }
-        indirect_vert_data.cpu[i].pos = { x, y, 0.0, 0.0 }
+        indirect_vert_data.cpu[i].color = { rgb.x, rgb.y, rgb.z }
+        indirect_vert_data.cpu[i].pos = { x, y, 0.0 }
         indirect_vert_data.cpu[i].size = 0.1
 
         indirect_command_cpu_mem[i] = gpu.Draw_Indexed_Indirect_Command {

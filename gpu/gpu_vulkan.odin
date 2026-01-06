@@ -272,6 +272,7 @@ _init :: proc(window: ^sdl.Window, frames_in_flight: u32)
         timelineSemaphore = true,
         bufferDeviceAddress = true,
         drawIndirectCount = true,
+        scalarBlockLayout = true,
     }
     next = &vk.PhysicalDeviceVulkan11Features {
         sType = .PHYSICAL_DEVICE_VULKAN_1_1_FEATURES,

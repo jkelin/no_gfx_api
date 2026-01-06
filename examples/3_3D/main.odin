@@ -9,6 +9,7 @@ import "gltf2"
 import "base:runtime"
 import "core:fmt"
 import "core:os"
+import intr "base:intrinsics"
 
 import sdl "vendor:sdl3"
 
@@ -60,8 +61,6 @@ main :: proc()
         gpu.shader_destroy(&vert_shader)
         gpu.shader_destroy(&frag_shader)
     }
-
-    Vertex :: struct { pos: [4]f32, color: [4]f32 }
 
     upload_arena := gpu.arena_init(1024 * 1024 * 1024)
     defer gpu.arena_destroy(&upload_arena)
@@ -126,21 +125,22 @@ main :: proc()
             mesh := scene.meshes[instance.mesh_idx]
 
             Vert_Data :: struct #all_or_none {
-                model_to_world: matrix[4, 4]f32,
-                model_to_world_normal: matrix[4, 4]f32,
-                world_to_view: matrix[4, 4]f32,
-                view_to_proj: matrix[4, 4]f32,
                 positions: rawptr,
                 normals: rawptr,
+                model_to_world: [16]f32,
+                model_to_world_normal: [16]f32,
+                world_to_view: [16]f32,
+                view_to_proj: [16]f32,
             }
+            #assert(size_of(Vert_Data) == 8+8+64+64+64+64)
             verts_data := gpu.arena_alloc(frame_arena, Vert_Data)
             verts_data.cpu^ = {
                 positions = mesh.pos,
                 normals = mesh.normals,
-                model_to_world = instance.transform,
-                model_to_world_normal = linalg.transpose(linalg.inverse(instance.transform)),
-                world_to_view = world_to_view,
-                view_to_proj = view_to_proj,
+                model_to_world = intr.matrix_flatten(instance.transform),
+                model_to_world_normal = intr.matrix_flatten(linalg.transpose(linalg.inverse(instance.transform))),
+                world_to_view = intr.matrix_flatten(world_to_view),
+                view_to_proj = intr.matrix_flatten(view_to_proj),
             }
 
             gpu.cmd_draw_indexed_instanced(cmd_buf, verts_data.gpu, nil, mesh.indices, mesh.idx_count, 1)
