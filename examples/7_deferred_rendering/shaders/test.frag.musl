@@ -1,0 +1,22 @@
+
+Data :: struct
+{
+    albedo_texture_id: textureid,
+}
+
+main :: (normal_vert: vec4 @in_loc(0), uv: vec2 @in_loc(1), data: ^Data @data) -> vec4 @out_loc(0)
+{
+    normal: vec3;
+    normal = normalize(normal_vert.xyz);
+    
+    // Sample albedo texture (always sample, will use texture 0 if invalid)
+    // For now, we'll always sample - if texture ID is invalid, it will sample texture 0
+    // TODO: Add proper sentinel value handling if needed
+    s: samplerid;
+    s = 0;
+    tex_color: vec4;
+    tex_color = sample(data.albedo_texture_id, s, uv);
+    
+    // Use texture color directly (albedo texture should provide the color)
+    return tex_color;
+}
