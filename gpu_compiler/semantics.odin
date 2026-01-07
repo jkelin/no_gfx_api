@@ -66,6 +66,15 @@ typecheck_ast :: proc(ast: Ast, input_path: string, allocator: runtime.Allocator
                     typecheck_error(&c, decl.token, "Variable declared with '@indirect_data' attribute must be of pointer or slice type.")
                 }
             }
+
+            for decl_2 in proc_def.scope.decls
+            {
+                if decl_2.name == decl.name && raw_data(decl_2.token.text) < raw_data(decl.token.text)
+                {
+                    typecheck_error_redeclaration(&c, decl_2, decl)
+                    break
+                }
+            }
         }
 
         old_scope := c.scope
@@ -452,6 +461,14 @@ typecheck_error_mismatching_types :: proc(using c: ^Checker, token: Token, type1
     error = true
 }
 
+typecheck_error_redeclaration :: proc(using c: ^Checker, decl_before: ^Ast_Decl, decl_after: ^Ast_Decl)
+{
+    if error do return
+
+    error_msg(input_path, decl_after.token, "Redeclaration of '%v' in this scope.", decl_after.name)
+    error = true
+}
+
 INTRINSICS: [dynamic]^Ast_Decl
 
 add_intrinsics :: proc()
@@ -528,7 +545,17 @@ bin_op_result_type :: proc(op: Ast_Binary_Op, type1: ^Ast_Type, type2: ^Ast_Type
 
 resolve_scope_decls :: proc(using c: ^Checker)
 {
-    for decl in scope.decls {
+    for decl in scope.decls
+    {
         resolve_type(c, decl.type)
+
+        for decl_2 in scope.decls
+        {
+            if decl_2.name == decl.name && raw_data(decl_2.token.text) < raw_data(decl.token.text)
+            {
+                typecheck_error_redeclaration(c, decl_2, decl)
+                break
+            }
+        }
     }
 }
