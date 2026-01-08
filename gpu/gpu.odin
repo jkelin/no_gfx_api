@@ -133,9 +133,9 @@ Draw_Indexed_Indirect_Command :: struct {
 
 Shader_Create_Info :: struct
 {
-    group_size_x: Maybe(u32),
-    group_size_y: Maybe(u32),
-    group_size_z: Maybe(u32),
+    group_size_x: u32,
+    group_size_y: u32,
+    group_size_z: u32,
 }
 
 // Procedures
@@ -173,7 +173,7 @@ get_texture_rw_view_descriptor_size: proc() -> u32 : _get_texture_rw_view_descri
 get_sampler_descriptor_size: proc() -> u32 : _get_sampler_descriptor_size
 
 // Shaders
-shader_create: proc(code: []u32, type: Shader_Type, info: Maybe(Shader_Create_Info) = nil) -> Shader : _shader_create
+shader_create: proc(code: []u32, type: Shader_Type, info: Shader_Create_Info = {}) -> Shader : _shader_create
 shader_destroy: proc(shader: ^Shader) : _shader_destroy
 
 // Semaphores

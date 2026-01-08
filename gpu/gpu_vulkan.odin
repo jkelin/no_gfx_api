@@ -1101,7 +1101,7 @@ _get_sampler_descriptor_size :: proc() -> u32
 }
 
 // Shaders
-_shader_create :: proc(code: []u32, type: Shader_Type, info: Maybe(Shader_Create_Info) = nil) -> Shader
+_shader_create :: proc(code: []u32, type: Shader_Type, info: Shader_Create_Info = {}) -> Shader
 {
     vk_stage := to_vk_shader_stage(type)
 
@@ -1137,19 +1137,26 @@ _shader_create :: proc(code: []u32, type: Shader_Type, info: Maybe(Shader_Create
     spec_info_ptr: ^vk.SpecializationInfo = nil
     spec_count: u32 = 0
 
-    group_size_x: u32 = 1
-    group_size_y: u32 = 1
-    group_size_z: u32 = 1
+    group_size_x: u32 = info.group_size_x
+    if group_size_x == 0
+    {
+        group_size_x = 1
+    }
+    
+    group_size_y: u32 = info.group_size_y
+    if group_size_y == 0
+    {
+        group_size_y = 1
+    }
+    
+    group_size_z: u32 = info.group_size_z
+    if group_size_z == 0
+    {
+        group_size_z = 1
+    }
     
     if type == .Compute
     {
-        if info != nil
-        {
-            group_size_x = info.?.group_size_x.? or_else 1
-            group_size_y = info.?.group_size_y.? or_else 1
-            group_size_z = info.?.group_size_z.? or_else 1
-        }
-
         {
             spec_map_entries[spec_count] = vk.SpecializationMapEntry {
                 constantID = 13370, // Random big ids to avoid conflicts with user defined constants
