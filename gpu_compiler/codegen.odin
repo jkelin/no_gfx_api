@@ -170,6 +170,21 @@ codegen :: proc(ast: Ast, shader_type: Shader_Type, input_path: string, output_p
             // Declare all variables
             for var_decl in proc_def.scope.decls
             {
+                // Skip function parameters without attributes - they're already declared in the signature
+                if var_decl.attr == nil
+                {
+                    is_param := false
+                    for param in proc_def.decl.type.args
+                    {
+                        if param.name == var_decl.name && param.attr == nil
+                        {
+                            is_param = true
+                            break
+                        }
+                    }
+                    if is_param do continue
+                }
+                
                 if var_decl.attr == nil
                 {
                     writefln("%v %v;", type_to_glsl(var_decl.type), var_decl.name)

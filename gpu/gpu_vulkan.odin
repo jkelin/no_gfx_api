@@ -1482,10 +1482,44 @@ _cmd_barrier :: proc(cmd_buf: Command_Buffer, before: Stage, after: Stage, hazar
     vk_before := to_vk_stage(before)
     vk_after  := to_vk_stage(after)
 
+    // Determine access masks based on hazards
+    src_access: vk.AccessFlags
+    dst_access: vk.AccessFlags
+
+    if .Draw_Arguments in hazards
+    {
+        // When compute shader writes draw arguments, ensure they're visible to indirect draw commands
+        // Source: compute shader writes
+        src_access += { .SHADER_WRITE }
+        // Destination: indirect command read (for draw/dispatch indirect)
+        dst_access += { .INDIRECT_COMMAND_READ }
+    }
+    
+    if .Descriptors in hazards
+    {
+        // When descriptors are updated, ensure visibility
+        src_access += { .SHADER_WRITE }
+        dst_access += { .SHADER_READ }
+    }
+    
+    if .Depth_Stencil in hazards
+    {
+        // Depth/stencil attachment synchronization
+        src_access += { .DEPTH_STENCIL_ATTACHMENT_WRITE }
+        dst_access += { .DEPTH_STENCIL_ATTACHMENT_READ, .DEPTH_STENCIL_ATTACHMENT_WRITE }
+    }
+
+    // If no specific hazards, use generic memory barrier
+    if card(hazards) == 0
+    {
+        src_access = { .MEMORY_WRITE }
+        dst_access = { .MEMORY_READ }
+    }
+
     barrier := vk.MemoryBarrier {
         sType = .MEMORY_BARRIER,
-        srcAccessMask = { .MEMORY_WRITE },
-        dstAccessMask = { .MEMORY_READ }
+        srcAccessMask = src_access,
+        dstAccessMask = dst_access,
     }
     vk.CmdPipelineBarrier(vk_cmd_buf, vk_before, vk_after, {}, 1, &barrier, 0, nil, 0, nil)
 }

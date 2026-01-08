@@ -349,6 +349,35 @@ typecheck_expr :: proc(using c: ^Checker, expression: ^Ast_Expr)
                     expr.type = &VEC4_TYPE
                     break
                 }
+                
+                // Try to resolve intrinsic overloads
+                found_overload := false
+                for intr in INTRINSICS
+                {
+                    if intr.name == target.token.text && intr.type.kind == .Proc
+                    {
+                        if len(intr.type.args) == len(expr.args)
+                        {
+                            match := true
+                            for arg, i in expr.args
+                            {
+                                if !same_type(arg.type, intr.type.args[i].type)
+                                {
+                                    match = false
+                                    break
+                                }
+                            }
+                            if match
+                            {
+                                expr.target.type = intr.type
+                                expr.type = intr.type.ret
+                                found_overload = true
+                                break
+                            }
+                        }
+                    }
+                }
+                if found_overload do break
             }
 
             // Regular procedure calls
@@ -489,6 +518,38 @@ add_intrinsics :: proc()
     add_intrinsic("imageStore", { &TEXTUREID_TYPE, &VEC2_TYPE, &VEC4_TYPE }, { "tex_idx", "coord", "value" }, nil)
     add_intrinsic("mix", { &VEC4_TYPE, &VEC4_TYPE, &FLOAT_TYPE }, { "a", "b", "t" }, &VEC4_TYPE)
     add_intrinsic("normalize", { &VEC3_TYPE }, { "v" }, &VEC3_TYPE)
+    
+    // Math functions - these work on float, vec2, vec3, vec4 (component-wise)
+    add_intrinsic("sin", { &FLOAT_TYPE }, { "x" }, &FLOAT_TYPE)
+    add_intrinsic("sin", { &VEC2_TYPE }, { "x" }, &VEC2_TYPE)
+    add_intrinsic("sin", { &VEC3_TYPE }, { "x" }, &VEC3_TYPE)
+    add_intrinsic("sin", { &VEC4_TYPE }, { "x" }, &VEC4_TYPE)
+    add_intrinsic("cos", { &FLOAT_TYPE }, { "x" }, &FLOAT_TYPE)
+    add_intrinsic("cos", { &VEC2_TYPE }, { "x" }, &VEC2_TYPE)
+    add_intrinsic("cos", { &VEC3_TYPE }, { "x" }, &VEC3_TYPE)
+    add_intrinsic("cos", { &VEC4_TYPE }, { "x" }, &VEC4_TYPE)
+    add_intrinsic("tanh", { &FLOAT_TYPE }, { "x" }, &FLOAT_TYPE)
+    add_intrinsic("tanh", { &VEC2_TYPE }, { "x" }, &VEC2_TYPE)
+    add_intrinsic("tanh", { &VEC3_TYPE }, { "x" }, &VEC3_TYPE)
+    add_intrinsic("tanh", { &VEC4_TYPE }, { "x" }, &VEC4_TYPE)
+    add_intrinsic("fract", { &FLOAT_TYPE }, { "x" }, &FLOAT_TYPE)
+    add_intrinsic("fract", { &VEC2_TYPE }, { "x" }, &VEC2_TYPE)
+    add_intrinsic("fract", { &VEC3_TYPE }, { "x" }, &VEC3_TYPE)
+    add_intrinsic("fract", { &VEC4_TYPE }, { "x" }, &VEC4_TYPE)
+    add_intrinsic("abs", { &FLOAT_TYPE }, { "x" }, &FLOAT_TYPE)
+    add_intrinsic("abs", { &VEC2_TYPE }, { "x" }, &VEC2_TYPE)
+    add_intrinsic("abs", { &VEC3_TYPE }, { "x" }, &VEC3_TYPE)
+    add_intrinsic("abs", { &VEC4_TYPE }, { "x" }, &VEC4_TYPE)
+    add_intrinsic("dot", { &VEC2_TYPE, &VEC2_TYPE }, { "a", "b" }, &FLOAT_TYPE)
+    add_intrinsic("dot", { &VEC3_TYPE, &VEC3_TYPE }, { "a", "b" }, &FLOAT_TYPE)
+    add_intrinsic("dot", { &VEC4_TYPE, &VEC4_TYPE }, { "a", "b" }, &FLOAT_TYPE)
+    add_intrinsic("length", { &VEC2_TYPE }, { "v" }, &FLOAT_TYPE)
+    add_intrinsic("length", { &VEC3_TYPE }, { "v" }, &FLOAT_TYPE)
+    add_intrinsic("length", { &VEC4_TYPE }, { "v" }, &FLOAT_TYPE)
+    add_intrinsic("min", { &FLOAT_TYPE, &FLOAT_TYPE }, { "a", "b" }, &FLOAT_TYPE)
+    add_intrinsic("min", { &VEC2_TYPE, &VEC2_TYPE }, { "a", "b" }, &VEC2_TYPE)
+    add_intrinsic("min", { &VEC3_TYPE, &VEC3_TYPE }, { "a", "b" }, &VEC3_TYPE)
+    add_intrinsic("min", { &VEC4_TYPE, &VEC4_TYPE }, { "a", "b" }, &VEC4_TYPE)
 }
 
 add_intrinsic :: proc(name: string, args: []^Ast_Type, names: []string, ret: ^Ast_Type = nil)

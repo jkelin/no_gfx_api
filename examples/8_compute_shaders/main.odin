@@ -91,15 +91,14 @@ main :: proc()
 
     Compute_Data :: struct {
         output_texture_id: u32,
+        resolution: [2]f32,
+        time: f32,
     }
 
     Vertex :: struct { pos: [3]f32, uv: [2]f32 }
 
     arena := gpu.arena_init(1024 * 1024)
     defer gpu.arena_destroy(&arena)
-
-    compute_data := gpu.arena_alloc(&arena, Compute_Data)
-    compute_data.cpu.output_texture_id = texture_id
 
     // Create fullscreen quad
     verts := gpu.arena_alloc_array(&arena, Vertex, 4)
@@ -136,6 +135,7 @@ main :: proc()
     gpu.queue_submit(queue, { upload_cmd_buf })
 
     now_ts := sdl.GetPerformanceCounter()
+    total_time: f32 = 0.0
 
     frame_arenas: [Frames_In_Flight]gpu.Arena
     for &frame_arena in frame_arenas do frame_arena = gpu.arena_init(1024 * 1024)
@@ -160,10 +160,17 @@ main :: proc()
         last_ts := now_ts
         now_ts = sdl.GetPerformanceCounter()
         delta_time := min(max_delta_time, f32(f64((now_ts - last_ts)*1000) / f64(ts_freq)) / 1000.0)
+        total_time += delta_time
 
         frame_arena := &frame_arenas[next_frame % Frames_In_Flight]
 
         swapchain := gpu.swapchain_acquire_next()  // Blocks CPU until at least one frame is available.
+
+        // Allocate compute data for this frame with current time and resolution
+        compute_data := gpu.arena_alloc(frame_arena, Compute_Data)
+        compute_data.cpu.output_texture_id = texture_id
+        compute_data.cpu.resolution = { f32(Window_Size_X), f32(Window_Size_Y) }
+        compute_data.cpu.time = total_time
 
         cmd_buf := gpu.commands_begin(queue)
         
@@ -235,14 +242,4 @@ handle_window_events :: proc(window: ^sdl.Window) -> (proceed: bool)
     }
 
     return
-}
-
-changing_color :: proc(delta_time: f32) -> [4]f32
-{
-    @(static) t: f32
-    t = math.mod(t + delta_time * 1.7, math.PI * 2)
-
-    color_a := [4]f32 { 0.2, 0.2, 0.2, 1.0 }
-    color_b := [4]f32 { 0.4, 0.4, 0.4, 1.0 }
-    return linalg.lerp(color_a, color_b, math.sin(t) * 0.5 + 0.5)
 }
