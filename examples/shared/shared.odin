@@ -39,7 +39,7 @@ Mesh :: struct {
 
 upload_mesh :: proc(
 	upload_arena: ^gpu.Arena,
-	cmd_buf: gpu.Command_Buffer,
+	cmd_buf: ^gpu.Command_Buffer,
 	positions: [][4]f32,
 	normals: [][4]f32,
 	uvs: [][2]f32,
@@ -325,7 +325,7 @@ buffer_slice_with_stride :: proc(
 load_scene_gltf :: proc(
 	contents: []byte,
 	upload_arena: ^gpu.Arena,
-	cmd_buf: gpu.Command_Buffer,
+	cmd_buf: ^gpu.Command_Buffer,
 ) -> (
 	Scene,
 	[]Gltf_Texture_Info,

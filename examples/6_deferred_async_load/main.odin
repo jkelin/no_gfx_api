@@ -37,7 +37,7 @@ Example_Name_Format :: "Right-click + WASD for first-person controls. Left click
 Sponza_Scene :: #load("../shared/assets/sponza.glb")
 
 // Whether to load textures in parallel in the background or preload them in main thread before running the screne
-Load_Textures_Async :: false
+Load_Textures_Async :: true
 Num_Async_Worker_Threads := clamp(info.cpu.logical_cores - 1, 2, 6)
 
 // How many textures to load in a single batch / command buffer
@@ -107,15 +107,15 @@ main :: proc() {
 	vert_shader_gbuffer := gpu.shader_create(#load("shaders/gbuffer.vert.spv", []u32), .Vertex)
 	frag_shader_gbuffer := gpu.shader_create(#load("shaders/gbuffer.frag.spv", []u32), .Fragment)
 	defer {
-		gpu.shader_destroy(&vert_shader_gbuffer)
-		gpu.shader_destroy(&frag_shader_gbuffer)
+		gpu.shader_destroy(vert_shader_gbuffer)
+		gpu.shader_destroy(frag_shader_gbuffer)
 	}
 
 	vert_shader_final := gpu.shader_create(#load("shaders/final_pass.vert.spv", []u32), .Vertex)
 	frag_shader_final := gpu.shader_create(#load("shaders/final_pass.frag.spv", []u32), .Fragment)
 	defer {
-		gpu.shader_destroy(&vert_shader_final)
-		gpu.shader_destroy(&frag_shader_final)
+		gpu.shader_destroy(vert_shader_final)
+		gpu.shader_destroy(frag_shader_final)
 	}
 
 	upload_arena := gpu.arena_init(128 * 1024 * 1024)
@@ -252,7 +252,7 @@ main :: proc() {
 	}
 
 	gpu.cmd_barrier(upload_cmd_buf, .Transfer, .All, {})
-	gpu.queue_submit(queue, {upload_cmd_buf})
+	gpu.queue_submit({upload_cmd_buf})
 
 	now_ts := sdl.GetPerformanceCounter()
 
@@ -362,7 +362,7 @@ main :: proc() {
 			full_screen_quad_indices_gpu,
 		)
 
-		gpu.queue_submit(queue, {cmd_buf}, frame_sem, next_frame)
+		gpu.queue_submit({cmd_buf}, frame_sem, next_frame)
 
 		gpu.swapchain_present(queue, frame_sem, next_frame)
 		next_frame += 1
@@ -374,13 +374,13 @@ main :: proc() {
 }
 
 render_pass_gbuffer :: proc(
-	cmd_buf: gpu.Command_Buffer,
+	cmd_buf: ^gpu.Command_Buffer,
 	gbuffer_albedo: gpu.Texture,
 	gbuffer_normal: gpu.Texture,
 	gbuffer_metallic_roughness: gpu.Texture,
 	depth_texture: gpu.Texture,
-	vert_shader: gpu.Shader,
-	frag_shader: gpu.Shader,
+	vert_shader: ^gpu.Shader,
+	frag_shader: ^gpu.Shader,
 	texture_heap: rawptr,
 	texture_rw_heap: rawptr,
 	sampler_heap: rawptr,
@@ -470,13 +470,13 @@ render_pass_gbuffer :: proc(
 }
 
 render_pass_final :: proc(
-	cmd_buf: gpu.Command_Buffer,
+	cmd_buf: ^gpu.Command_Buffer,
 	swapchain: gpu.Texture,
 	gbuffer_albedo: gpu.Texture,
 	gbuffer_normal: gpu.Texture,
 	gbuffer_metallic_roughness: gpu.Texture,
-	vert_shader: gpu.Shader,
-	frag_shader: gpu.Shader,
+	vert_shader: ^gpu.Shader,
+	frag_shader: ^gpu.Shader,
 	texture_heap: rawptr,
 	texture_rw_heap: rawptr,
 	sampler_heap: rawptr,
@@ -625,7 +625,7 @@ create_gbuffer_textures :: proc(
 // Create a 1x1 magenta texture (useful as default/missing texture indicator)
 create_magenta_texture :: proc(
 	upload_arena: ^gpu.Arena,
-	cmd_buf: gpu.Command_Buffer,
+	cmd_buf: ^gpu.Command_Buffer,
 	texture_heap: rawptr,
 ) -> gpu.Owned_Texture {
 	magenta_pixels := [4]u8{255, 0, 255, 255}
@@ -654,7 +654,7 @@ create_magenta_texture :: proc(
 
 create_fullscreen_quad :: proc(
 	upload_arena: ^gpu.Arena,
-	cmd_buf: gpu.Command_Buffer,
+	cmd_buf: ^gpu.Command_Buffer,
 ) -> (
 	rawptr,
 	rawptr,
@@ -751,7 +751,7 @@ load_scene_textures_from_gltf :: proc(
 			)
 
 			gpu.cmd_barrier(upload_cmd_buf, .Transfer, .All, {})
-			gpu.queue_submit(transfer_queue, {upload_cmd_buf})
+			gpu.queue_submit({upload_cmd_buf})
 
 			if sync.guard(&mutex) do image_to_texture[info.image_index] = {texture, texture_idx}
 
@@ -796,7 +796,7 @@ load_texture_from_gltf :: proc(
 	image_data: gltf2.Image,
 	data: ^gltf2.Data,
 	upload_arena: ^gpu.Arena,
-	cmd_buf: gpu.Command_Buffer,
+	cmd_buf: ^gpu.Command_Buffer,
 	queue: gpu.Queue = nil,
 ) -> gpu.Owned_Texture {
 	image_bytes: []byte

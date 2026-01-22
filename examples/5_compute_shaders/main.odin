@@ -54,9 +54,9 @@ main :: proc()
     vert_shader := gpu.shader_create(#load("shaders/test.vert.spv", []u32), .Vertex)
     frag_shader := gpu.shader_create(#load("shaders/test.frag.spv", []u32), .Fragment)
     defer {
-        gpu.shader_destroy(&compute_shader)
-        gpu.shader_destroy(&vert_shader)
-        gpu.shader_destroy(&frag_shader)
+        gpu.shader_destroy(compute_shader)
+        gpu.shader_destroy(vert_shader)
+        gpu.shader_destroy(frag_shader)
     }
 
     // Create a texture for the compute shader to write to
@@ -148,7 +148,7 @@ main :: proc()
     gpu.cmd_mem_copy(upload_cmd_buf, verts.gpu, verts_local, u64(len(verts.cpu)) * size_of(verts.cpu[0]))
     gpu.cmd_mem_copy(upload_cmd_buf, indices.gpu, indices_local, u64(len(indices.cpu)) * size_of(indices.cpu[0]))
     gpu.cmd_barrier(upload_cmd_buf, .Transfer, .All, {})
-    gpu.queue_submit(queue, { upload_cmd_buf })
+    gpu.queue_submit({ upload_cmd_buf })
 
     now_ts := sdl.GetPerformanceCounter()
     total_time: f32 = 0.0
@@ -260,7 +260,7 @@ main :: proc()
 
         gpu.cmd_draw_indexed_instanced(cmd_buf, verts_data.gpu, frag_data.gpu, indices_local, u32(len(indices.cpu)), 1)
         gpu.cmd_end_render_pass(cmd_buf)
-        gpu.queue_submit(queue, { cmd_buf }, frame_sem, next_frame)
+        gpu.queue_submit({ cmd_buf }, frame_sem, next_frame)
 
         gpu.swapchain_present(queue, frame_sem, next_frame)
         next_frame += 1

@@ -13,10 +13,8 @@ import vk "vendor:vulkan"
 // Handles
 Handle :: rawptr
 Texture_Handle :: distinct Handle
-Command_Buffer :: distinct Handle
 Queue :: distinct Handle
 Semaphore :: distinct Handle
-Shader :: distinct Handle
 Texture_Descriptor :: struct { bytes: [4]u64 }
 Sampler_Descriptor :: struct { bytes: [2]u64 }
 
@@ -139,6 +137,24 @@ Dispatch_Indirect_Command :: struct {
     num_groups_z: u32,
 }
 
+Shader :: struct {
+    native_handle: rawptr,
+    command_buffers: [dynamic]^Command_Buffer,
+    current_workgroup_size: [3]u32,
+    is_compute: bool,
+}
+
+Command_Buffer :: struct  {
+    native_handle: rawptr,
+    timeline_value: u64,
+    thread_id: int,
+    queue: Queue,
+    queue_type: Queue_Type,
+    compute_shader: Maybe(^Shader),
+    recording: bool,
+    id: u32,
+}
+
 // Procedures
 
 // Initialization and interaction with the OS. This is simpler than it would probably be, for brevity.
@@ -168,8 +184,8 @@ get_texture_rw_view_descriptor_size: proc() -> u32 : _get_texture_rw_view_descri
 get_sampler_descriptor_size: proc() -> u32 : _get_sampler_descriptor_size
 
 // Shaders
-shader_create: proc(code: []u32, type: Shader_Type_Graphics) -> Shader : _shader_create
-shader_create_compute: proc(code: []u32, group_size_x: u32, group_size_y: u32 = 1, group_size_z: u32 = 1) -> Shader : _shader_create_compute
+shader_create: proc(code: []u32, type: Shader_Type_Graphics) -> ^Shader : _shader_create
+shader_create_compute: proc(code: []u32, group_size_x: u32, group_size_y: u32 = 1, group_size_z: u32 = 1) -> ^Shader : _shader_create_compute
 shader_destroy: proc(shader: ^Shader) : _shader_destroy
 
 // Semaphores
@@ -180,41 +196,41 @@ semaphore_destroy: proc(sem: ^Semaphore) : _semaphore_destroy
 // Queues
 get_queue: proc(queue_type: Queue_Type) -> Queue : _get_queue
 queue_wait_idle: proc(queue: Queue) : _queue_wait_idle
-queue_submit: proc(queue: Queue, cmd_bufs: []Command_Buffer, signal_sem: Semaphore = {}, signal_value: u64 = 0) : _queue_submit
+queue_submit: proc(cmd_bufs: []^Command_Buffer, signal_sem: Semaphore = {}, signal_value: u64 = 0) : _queue_submit
 
 // Command buffer
-commands_begin: proc(queue: Queue) -> Command_Buffer : _commands_begin
+commands_begin: proc(queue: Queue) -> ^Command_Buffer : _commands_begin
 
 // Commands
-cmd_mem_copy: proc(cmd_buf: Command_Buffer, src, dst: rawptr, #any_int bytes: i64) : _cmd_mem_copy
-cmd_copy_to_texture: proc(cmd_buf: Command_Buffer, texture: Texture, src, dst: rawptr) : _cmd_copy_to_texture
+cmd_mem_copy: proc(cmd_buf: ^Command_Buffer, src, dst: rawptr, #any_int bytes: i64) : _cmd_mem_copy
+cmd_copy_to_texture: proc(cmd_buf: ^Command_Buffer, texture: Texture, src, dst: rawptr) : _cmd_copy_to_texture
 
-cmd_set_texture_heap: proc(cmd_buf: Command_Buffer, textures, textures_rw, samplers: rawptr) : _cmd_set_texture_heap
+cmd_set_texture_heap: proc(cmd_buf: ^Command_Buffer, textures, textures_rw, samplers: rawptr) : _cmd_set_texture_heap
 
-cmd_barrier: proc(cmd_buf: Command_Buffer, before: Stage, after: Stage, hazards: Hazard_Flags = {}) : _cmd_barrier
+cmd_barrier: proc(cmd_buf: ^Command_Buffer, before: Stage, after: Stage, hazards: Hazard_Flags = {}) : _cmd_barrier
 //cmd_signal_after: proc() : _cmd_signal_after
 //cmd_wait_before: proc() : _cmd_wait_before
 
-cmd_set_shaders: proc(cmd_buf: Command_Buffer, vert_shader: Shader, frag_shader: Shader) : _cmd_set_shaders
-cmd_set_compute_shader: proc(cmd_buf: Command_Buffer, compute_shader: Shader) : _cmd_set_compute_shader
-cmd_set_depth_state: proc(cmd_buf: Command_Buffer, state: Depth_State) : _cmd_set_depth_state
-cmd_set_blend_state: proc(cmd_buf: Command_Buffer, state: Blend_State) : _cmd_set_blend_state
+cmd_set_shaders: proc(cmd_buf: ^Command_Buffer, vert_shader: ^Shader, frag_shader: ^Shader) : _cmd_set_shaders
+cmd_set_compute_shader: proc(cmd_buf: ^Command_Buffer, compute_shader: ^Shader) : _cmd_set_compute_shader
+cmd_set_depth_state: proc(cmd_buf: ^Command_Buffer, state: Depth_State) : _cmd_set_depth_state
+cmd_set_blend_state: proc(cmd_buf: ^Command_Buffer, state: Blend_State) : _cmd_set_blend_state
 
 // Run compute shader based on number of groups
-cmd_dispatch: proc(cmd_buf: Command_Buffer, compute_data: rawptr, num_groups_x: u32, num_groups_y: u32 = 1, num_groups_z: u32 = 1) : _cmd_dispatch
+cmd_dispatch: proc(cmd_buf: ^Command_Buffer, compute_data: rawptr, num_groups_x: u32, num_groups_y: u32 = 1, num_groups_z: u32 = 1) : _cmd_dispatch
 
 // Schedule indirect compute shader based on number of groups, arguments is a pointer to a Dispatch_Indirect_Command struct
-cmd_dispatch_indirect: proc(cmd_buf: Command_Buffer, compute_data: rawptr, arguments: rawptr) : _cmd_dispatch_indirect
+cmd_dispatch_indirect: proc(cmd_buf: ^Command_Buffer, compute_data: rawptr, arguments: rawptr) : _cmd_dispatch_indirect
 
-cmd_begin_render_pass: proc(cmd_buf: Command_Buffer, desc: Render_Pass_Desc) : _cmd_begin_render_pass
-cmd_end_render_pass: proc(cmd_buf: Command_Buffer) : _cmd_end_render_pass
+cmd_begin_render_pass: proc(cmd_buf: ^Command_Buffer, desc: Render_Pass_Desc) : _cmd_begin_render_pass
+cmd_end_render_pass: proc(cmd_buf: ^Command_Buffer) : _cmd_end_render_pass
 
 // Indices can be nil
-cmd_draw_indexed_instanced: proc(cmd_buf: Command_Buffer, vertex_data: rawptr, fragment_data: rawptr,
+cmd_draw_indexed_instanced: proc(cmd_buf: ^Command_Buffer, vertex_data: rawptr, fragment_data: rawptr,
                                  indices: rawptr, index_count: u32, instance_count: u32 = 1) : _cmd_draw_indexed_instanced
-cmd_draw_indexed_instanced_indirect: proc(cmd_buf: Command_Buffer, vertex_data: rawptr, fragment_data: rawptr,
+cmd_draw_indexed_instanced_indirect: proc(cmd_buf: ^Command_Buffer, vertex_data: rawptr, fragment_data: rawptr,
                                           indices: rawptr, indirect_arguments: rawptr) : _cmd_draw_indexed_instanced_indirect
-cmd_draw_indexed_instanced_indirect_multi: proc(cmd_buf: Command_Buffer, data_vertex: rawptr, data_pixel: rawptr,
+cmd_draw_indexed_instanced_indirect_multi: proc(cmd_buf: ^Command_Buffer, data_vertex: rawptr, data_pixel: rawptr,
                                                  indices: rawptr, indirect_arguments: rawptr, stride: u32, draw_count: rawptr) : _cmd_draw_indexed_instanced_indirect_multi
 
 /////////////////////////

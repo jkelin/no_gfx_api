@@ -45,8 +45,8 @@ main :: proc()
     vert_shader := gpu.shader_create(#load("shaders/test.vert.spv", []u32), .Vertex)
     frag_shader := gpu.shader_create(#load("shaders/test.frag.spv", []u32), .Fragment)
     defer {
-        gpu.shader_destroy(&vert_shader)
-        gpu.shader_destroy(&frag_shader)
+        gpu.shader_destroy(vert_shader)
+        gpu.shader_destroy(frag_shader)
     }
 
     Vertex :: struct { pos: [3]f32, color: [3]f32 }
@@ -80,7 +80,7 @@ main :: proc()
     gpu.cmd_mem_copy(upload_cmd_buf, verts.gpu, verts_local, 3 * size_of(Vertex))
     gpu.cmd_mem_copy(upload_cmd_buf, indices.gpu, indices_local, 3 * size_of(u32))
     gpu.cmd_barrier(upload_cmd_buf, .Transfer, .All, {})
-    gpu.queue_submit(queue, { upload_cmd_buf })
+    gpu.queue_submit({ upload_cmd_buf })
 
     now_ts := sdl.GetPerformanceCounter()
 
@@ -134,7 +134,7 @@ main :: proc()
 
         gpu.cmd_draw_indexed_instanced(cmd_buf, verts_data.gpu, nil, indices_local, 3, 1)
         gpu.cmd_end_render_pass(cmd_buf)
-        gpu.queue_submit(queue, { cmd_buf }, frame_sem, next_frame)
+        gpu.queue_submit({ cmd_buf }, frame_sem, next_frame)
 
         gpu.swapchain_present(queue, frame_sem, next_frame)
         next_frame += 1

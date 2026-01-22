@@ -50,8 +50,8 @@ main :: proc()
     vert_shader := gpu.shader_create(#load("shaders/test.vert.spv", []u32), .Vertex)
     frag_shader := gpu.shader_create(#load("shaders/test.frag.spv", []u32), .Fragment)
     defer {
-        gpu.shader_destroy(&vert_shader)
-        gpu.shader_destroy(&frag_shader)
+        gpu.shader_destroy(vert_shader)
+        gpu.shader_destroy(frag_shader)
     }
 
     texture_heap := gpu.mem_alloc(size_of(gpu.Texture_Descriptor) * 65536, alloc_type = .Descriptors)
@@ -106,7 +106,7 @@ main :: proc()
     gpu.cmd_mem_copy(upload_cmd_buf, indices.gpu, indices_local, u64(len(indices.cpu)) * size_of(indices.cpu[0]))
     gpu.cmd_barrier(upload_cmd_buf, .Transfer, .All, {})
 
-    gpu.queue_submit(queue, { upload_cmd_buf })
+    gpu.queue_submit({ upload_cmd_buf })
 
     gpu.set_texture_desc(texture_heap, 0, gpu.texture_view_descriptor(bowser_tex, { format = .RGBA8_Unorm }))
     gpu.set_texture_desc(texture_heap, 1, gpu.texture_view_descriptor(peach_tex, { format = .RGBA8_Unorm }))
@@ -178,7 +178,7 @@ main :: proc()
 
         gpu.cmd_draw_indexed_instanced(cmd_buf, verts_data.gpu, frag_data.gpu, indices_local, u32(len(indices.cpu)), 1)
         gpu.cmd_end_render_pass(cmd_buf)
-        gpu.queue_submit(queue, { cmd_buf }, frame_sem, next_frame)
+        gpu.queue_submit({ cmd_buf }, frame_sem, next_frame)
 
         gpu.swapchain_present(queue, frame_sem, next_frame)
         next_frame += 1
@@ -211,7 +211,7 @@ handle_window_events :: proc(window: ^sdl.Window) -> (proceed: bool)
     return
 }
 
-load_texture :: proc(bytes: []byte, upload_arena: ^gpu.Arena, cmd_buf: gpu.Command_Buffer) -> gpu.Owned_Texture
+load_texture :: proc(bytes: []byte, upload_arena: ^gpu.Arena, cmd_buf: ^gpu.Command_Buffer) -> gpu.Owned_Texture
 {
     options := image.Options {
         .alpha_add_if_missing,

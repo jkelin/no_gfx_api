@@ -8,5 +8,5 @@ get_vulkan_physical_device: proc() -> vk.PhysicalDevice : _get_vulkan_physical_d
 get_vulkan_device: proc() -> vk.Device : _get_vulkan_device
 get_vulkan_queue: proc(queue: Queue) -> vk.Queue : _get_vulkan_queue
 get_vulkan_queue_family: proc(queue: Queue) -> u32 : _get_vulkan_queue_family
-get_vulkan_command_buffer: proc(cmd_buf: Command_Buffer) -> vk.CommandBuffer : _get_vulkan_command_buffer
+get_vulkan_command_buffer: proc(cmd_buf: ^Command_Buffer) -> vk.CommandBuffer : _get_vulkan_command_buffer
 get_swapchain_image_count: proc() -> u32 : _get_swapchain_image_count
