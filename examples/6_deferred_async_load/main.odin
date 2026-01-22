@@ -21,6 +21,7 @@ import "core:math/linalg"
 import "core:strings"
 import "core:sync"
 import "core:thread"
+import "core:sys/info"
 
 
 import sdl "vendor:sdl3"
@@ -36,7 +37,11 @@ Example_Name_Format :: "Right-click + WASD for first-person controls. Left click
 Sponza_Scene :: #load("../shared/assets/sponza.glb")
 
 // Whether to load textures in parallel in the background or preload them in main thread before running the screne
-Load_Textures_Async :: true
+Load_Textures_Async :: false
+Num_Async_Worker_Threads := clamp(info.cpu.logical_cores - 1, 2, 6)
+
+// How many textures to load in a single batch / command buffer
+Loader_Chunk_Size :: 16
 
 // G-buffer texture indices in texture heap
 GBUFFER_ALBEDO_IDX :: 1000
@@ -113,7 +118,7 @@ main :: proc() {
 		gpu.shader_destroy(&frag_shader_final)
 	}
 
-	upload_arena := gpu.arena_init(1024 * 1024 * 1024)
+	upload_arena := gpu.arena_init(128 * 1024 * 1024)
 	defer gpu.arena_destroy(&upload_arena)
 
 	queue := gpu.get_queue(.Main)
@@ -130,7 +135,7 @@ main :: proc() {
 
 	// Set up texture heap
 	texture_heap := gpu.mem_alloc(
-		size_of(gpu.Texture_Descriptor) * 65536,
+		size_of(gpu.Texture_Descriptor) * 2048,
 		alloc_type = .Descriptors,
 	)
 	defer gpu.mem_free(texture_heap)
@@ -139,7 +144,7 @@ main :: proc() {
 
 	// Set up read-write texture heap for G-buffer textures
 	texture_rw_heap_size := gpu.get_texture_rw_view_descriptor_size()
-	texture_rw_heap := gpu.mem_alloc(u64(texture_rw_heap_size) * 65536, alloc_type = .Descriptors)
+	texture_rw_heap := gpu.mem_alloc(u64(texture_rw_heap_size) * 2048, alloc_type = .Descriptors)
 	defer gpu.mem_free(texture_rw_heap)
 
 
@@ -156,65 +161,75 @@ main :: proc() {
 		gltf2.unload(gltf_data)
 	}
 
-	defer {
-		// Clean up loaded textures
-		sync.guard(&mutex)
-		for &tex in loaded_textures {
-			gpu.free_and_destroy_texture(&tex)
-		}
-	}
+    defer {
+        // Clean up loaded textures
+        sync.guard(&mutex)
+        for &tex in loaded_textures {
+            gpu.free_and_destroy_texture(&tex)
+        }
+    }
 
-	loading_threads: [dynamic]^thread.Thread
-	defer {
-		cancel_loading_textures = true
-		for t in loading_threads {
-			thread.terminate(t, 0)
-		}
-	}
-
-	Texture_Loader_Data :: struct {
-		texture_infos: []shared.Gltf_Texture_Info,
-		gltf_data:     ^gltf2.Data,
-		scene:         ^shared.Scene,
-		texture_heap:  rawptr,
-		logger:        log.Logger,
-	}
-	loader_data: [dynamic]Texture_Loader_Data
-
-	chunk_size :: 16
-	for i := 0; i < len(texture_infos); i += chunk_size {
-		end := min(i + chunk_size, len(texture_infos))
-		chunk := texture_infos[i:end]
-
-		log.debug(fmt.tprintf("Creating texture loader for chunk %v of %v", i, len(texture_infos)))
-
-		when Load_Textures_Async {
-			loader_data_item := Texture_Loader_Data {
-				texture_infos = chunk,
-				gltf_data     = gltf_data,
-				scene         = &scene,
-				texture_heap  = texture_heap,
-				logger        = console_logger,
+	when Load_Textures_Async {
+		worker_threads: [dynamic]^thread.Thread
+		defer {
+			cancel_loading_textures = true
+			for t in worker_threads {
+				thread.terminate(t, 0)
 			}
+		}
 
-			append(&loader_data, loader_data_item)
+		Texture_Loader_Data :: struct {
+			texture_infos: []shared.Gltf_Texture_Info,
+			gltf_data:     ^gltf2.Data,
+			scene:         ^shared.Scene,
+			texture_heap:  rawptr,
+			logger:        log.Logger,
+            current_chunk: ^int,
+		}
+		loader_data := Texture_Loader_Data {
+            texture_infos = texture_infos,
+            gltf_data     = gltf_data,
+            scene         = &scene,
+            texture_heap  = texture_heap,
+            logger        = console_logger,
+            current_chunk = new(int),
+        }
 
-			texture_loader_thread_proc :: proc(thread: ^thread.Thread) {
-				data := cast(^Texture_Loader_Data)thread.data
-				context.logger = data.logger
-				load_scene_textures_from_gltf(
-					data.texture_infos,
-					data.gltf_data,
-					data.scene,
-					data.texture_heap,
-				)
-			}
+        texture_loader_thread_proc :: proc(thread: ^thread.Thread) {
+            data := cast(^Texture_Loader_Data)thread.data
+            context.logger = data.logger
 
+            for !cancel_loading_textures {
+                current_chunk_start := sync.atomic_add(data.current_chunk, Loader_Chunk_Size)
+                current_chunk_end := min(current_chunk_start + Loader_Chunk_Size, len(data.texture_infos))
+
+                if current_chunk_start >= len(data.texture_infos) {
+                    break
+                }
+
+                log.debug(
+                    fmt.tprintf("Creating texture loader for chunk %v of %v", current_chunk_start, len(data.texture_infos)),
+                )
+
+                load_scene_textures_from_gltf(
+                    data.texture_infos[current_chunk_start:current_chunk_end],
+                    data.gltf_data,
+                    data.scene,
+                    data.texture_heap,
+                )
+            }
+        }
+
+		for i := 0; i < Num_Async_Worker_Threads; i += 1 {
 			texture_loader_thread := thread.create(texture_loader_thread_proc)
-			texture_loader_thread.data = &loader_data[len(loader_data) - 1]
+			texture_loader_thread.data = &loader_data
 			thread.start(texture_loader_thread)
-			append(&loading_threads, texture_loader_thread)
-		} else {
+			append(&worker_threads, texture_loader_thread)
+		}
+	} else {
+		for i := 0; i < len(texture_infos); i += Loader_Chunk_Size {
+			end := min(i + Loader_Chunk_Size, len(texture_infos))
+			chunk := texture_infos[i:end]
 			load_scene_textures_from_gltf(chunk, gltf_data, &scene, texture_heap)
 		}
 	}
@@ -695,7 +710,7 @@ load_scene_textures_from_gltf :: proc(
 ) {
 	transfer_queue := gpu.get_queue(.Transfer)
 
-	upload_arena := gpu.arena_init(1024 * 1024 * 1024)
+	upload_arena := gpu.arena_init(Loader_Chunk_Size * 4 * 1024 * 1024)
 	defer gpu.arena_destroy(&upload_arena)
 
 	for info in texture_infos {
