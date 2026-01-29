@@ -43,6 +43,16 @@ Num_Async_Worker_Threads := clamp(info.cpu.logical_cores - 1, 2, 6)
 // How many textures to load in a single batch / command buffer
 Loader_Chunk_Size :: 16
 
+calc_mip_count :: proc(width: u32, height: u32) -> u32 {
+	max_dim := max(width, height)
+	mip_count: u32 = 1
+	for max_dim > 1 {
+		max_dim >>= 1
+		mip_count += 1
+	}
+	return mip_count
+}
+
 // G-buffer texture indices in texture heap
 GBUFFER_ALBEDO_IDX :: 1000
 GBUFFER_NORMAL_IDX :: 1001
@@ -240,7 +250,14 @@ main :: proc() {
 		}
 	}
 
-	gpu.set_sampler_desc(sampler_heap, 0, gpu.sampler_descriptor({}))
+	gpu.set_sampler_desc(sampler_heap, 0, gpu.sampler_descriptor({
+        mag_filter = .Linear,
+        min_filter = .Linear,
+        mip_filter = .Linear,
+        address_mode_u = .Repeat,
+        address_mode_v = .Repeat,
+        address_mode_w = .Repeat,
+    }))
 
 
 	gbuffer_albedo, gbuffer_normal, gbuffer_metallic_roughness, depth_texture :=
@@ -719,7 +736,8 @@ load_scene_textures_from_gltf :: proc(
 	scene: ^shared.Scene,
 	texture_heap: rawptr,
 ) {
-	transfer_queue := gpu.get_queue(.Transfer)
+	// Mipmap blits require graphics-capable queue.
+	graphics_queue := gpu.get_queue(.Main)
 
 	upload_arena := gpu.arena_init(Loader_Chunk_Size * 4 * 1024 * 1024)
 	defer gpu.arena_destroy(&upload_arena)
@@ -751,18 +769,18 @@ load_scene_textures_from_gltf :: proc(
 			image_uploaded[info.image_index] = event
 			sync.mutex_unlock(&mutex)
 
-			upload_cmd_buf := gpu.commands_begin(transfer_queue)
+			upload_cmd_buf := gpu.commands_begin(graphics_queue)
 
 			texture := load_texture_from_gltf(
 				data.images[info.image_index],
 				data,
 				&upload_arena,
 				upload_cmd_buf,
-				transfer_queue,
+				graphics_queue,
 			)
 
 			gpu.cmd_barrier(upload_cmd_buf, .Transfer, .All, {})
-			gpu.queue_submit(transfer_queue, {upload_cmd_buf})
+			gpu.queue_submit(graphics_queue, {upload_cmd_buf})
 
 			if sync.guard(&mutex) do image_to_texture[info.image_index] = {texture, texture_idx}
 
@@ -779,7 +797,7 @@ load_scene_textures_from_gltf :: proc(
 		}
 	}
 
-	gpu.queue_wait_idle(transfer_queue)
+	gpu.queue_wait_idle(graphics_queue)
 
 	for info in texture_infos {
 		sync.guard(&mutex)
@@ -874,7 +892,7 @@ load_texture_from_gltf :: proc(
 		{
 			type = .D2,
 			dimensions = {u32(img.width), u32(img.height), 1},
-			mip_count = 1,
+			mip_count = calc_mip_count(u32(img.width), u32(img.height)),
 			layer_count = 1,
 			sample_count = 1,
 			format = .RGBA8_Unorm,
@@ -885,6 +903,11 @@ load_texture_from_gltf :: proc(
 	if sync.guard(&mutex) do append(&loaded_textures, texture)
 
 	gpu.cmd_copy_to_texture(cmd_buf, texture, staging_gpu)
+	if texture.mip_count > 1 {
+		// Build mip chain on GPU for better sampling quality.
+		gpu.cmd_generate_mipmaps(cmd_buf, texture)
+        log.info(fmt.tprintf("Generated mipmaps for texture %v", texture.handle))
+	}
 	return texture
 }
 

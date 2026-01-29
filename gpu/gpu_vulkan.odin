@@ -934,6 +934,8 @@ _swapchain_acquire_next :: proc() -> Texture
 
     return Texture {
         dimensions = { ctx.swapchain.width, ctx.swapchain.height, 1 },
+        mip_count = 1,
+        layer_count = 1,
         format = .BGRA8_Unorm,
         handle = transmute(Texture_Handle) ctx.swapchain.texture_keys[ctx.swapchain_image_idx],
     }
@@ -1218,6 +1220,15 @@ _texture_create :: proc(desc: Texture_Desc, storage: rawptr, queue: Queue = nil,
     alloc := ctx.gpu_allocs[alloc_idx]
     sync.unlock(&ctx.lock)
 
+    actual_mip_count := desc.mip_count
+    if actual_mip_count == 0 {
+        actual_mip_count = 1
+    }
+    actual_layer_count := desc.layer_count
+    if actual_layer_count == 0 {
+        actual_layer_count = 1
+    }
+
     image: vk.Image
     offset := uintptr(storage) - uintptr(alloc.device_address)
     vk_check(vma.create_aliasing_image2(ctx.vma_allocator, alloc.allocation, vk.DeviceSize(offset), {
@@ -1225,10 +1236,10 @@ _texture_create :: proc(desc: Texture_Desc, storage: rawptr, queue: Queue = nil,
         imageType = to_vk_texture_type(desc.type),
         format = to_vk_texture_format(desc.format),
         extent = vk.Extent3D { desc.dimensions.x, desc.dimensions.y, desc.dimensions.z },
-        mipLevels = desc.mip_count,
-        arrayLayers = desc.layer_count,
+        mipLevels = actual_mip_count,
+        arrayLayers = actual_layer_count,
         samples = to_vk_sample_count(desc.sample_count),
-        usage = to_vk_texture_usage(desc.usage) + { .TRANSFER_DST },
+        usage = to_vk_texture_usage_with_transfers(desc, actual_mip_count),
         initialLayout = .UNDEFINED,
     }, &image))
 
@@ -1245,22 +1256,13 @@ _texture_create :: proc(desc: Texture_Desc, storage: rawptr, queue: Queue = nil,
         }
         vk_check(vk.BeginCommandBuffer(vk_cmd_buf, &cmd_buf_bi))
 
-        mip_levels := desc.mip_count
-        if mip_levels == 0 {
-            mip_levels = 1
-        }
-        layer_count := desc.layer_count
-        if layer_count == 0 {
-            layer_count = 1
-        }
-
         transition := vk.ImageMemoryBarrier2 {
             sType = .IMAGE_MEMORY_BARRIER_2,
             image = image,
             subresourceRange = {
                 aspectMask = plane_aspect,
-                levelCount = mip_levels,
-                layerCount = layer_count,
+                levelCount = actual_mip_count,
+                layerCount = actual_layer_count,
             },
             oldLayout = .UNDEFINED,
             newLayout = .GENERAL,
@@ -1283,6 +1285,8 @@ _texture_create :: proc(desc: Texture_Desc, storage: rawptr, queue: Queue = nil,
     sync.guard(&ctx.lock)
     return {
         dimensions = desc.dimensions,
+        mip_count = actual_mip_count,
+        layer_count = actual_layer_count,
         format = desc.format,
         handle = transmute(Texture_Handle) u64(pool_append(&ctx.textures, tex_info))
     }
@@ -1308,15 +1312,24 @@ _texture_destroy :: proc(texture: ^Texture)
 
 _texture_size_and_align :: proc(desc: Texture_Desc) -> (size: u64, align: u64)
 {
+    actual_mip_count := desc.mip_count
+    if actual_mip_count == 0 {
+        actual_mip_count = 1
+    }
+    actual_layer_count := desc.layer_count
+    if actual_layer_count == 0 {
+        actual_layer_count = 1
+    }
+
     image_ci := vk.ImageCreateInfo {
         sType = .IMAGE_CREATE_INFO,
         imageType = to_vk_texture_type(desc.type),
         format = to_vk_texture_format(desc.format),
         extent = vk.Extent3D { desc.dimensions.x, desc.dimensions.y, desc.dimensions.z },
-        mipLevels = desc.mip_count,
-        arrayLayers = desc.layer_count,
+        mipLevels = actual_mip_count,
+        arrayLayers = actual_layer_count,
         samples = to_vk_sample_count(desc.sample_count),
-        usage = to_vk_texture_usage(desc.usage),
+        usage = to_vk_texture_usage_with_transfers(desc, actual_mip_count),
         initialLayout = .UNDEFINED,
     }
 
@@ -1439,6 +1452,14 @@ _sampler_descriptor :: proc(sampler_desc: Sampler_Desc) -> Sampler_Descriptor
         addressModeU = to_vk_address_mode(sampler_desc.address_mode_u),
         addressModeV = to_vk_address_mode(sampler_desc.address_mode_v),
         addressModeW = to_vk_address_mode(sampler_desc.address_mode_w),
+        anisotropyEnable = true,
+        maxAnisotropy = 16,
+        compareEnable = false,
+        compareOp = .NEVER,
+        minLod = 0,
+        maxLod = 0xfffffff,
+        borderColor = .FLOAT_TRANSPARENT_BLACK,
+        unnormalizedCoordinates = false,
     }
     sampler := get_or_add_sampler(sampler_ci)
 
@@ -1986,6 +2007,166 @@ _cmd_copy_mips_to_texture :: proc(
         u32(len(regions)),
         &vk_regions[0],
     )
+}
+
+_cmd_generate_mipmaps :: proc(cmd_buf: Command_Buffer, texture: Texture)
+{
+    if texture.mip_count <= 1 {
+        return
+    }
+    if texture.format == .D32_Float {
+        log.error("cmd_generate_mipmaps: depth formats are not supported.")
+        return
+    }
+    if is_block_compressed(texture.format) {
+        // TODO: Implement block-compressed mipmap generation.
+        log.error("cmd_generate_mipmaps: block-compressed formats are not supported yet.")
+        return
+    }
+
+    sync.lock(&ctx.lock)
+    cmd := get_resource(cmd_buf, ctx.command_buffers)
+    tex_info := get_resource(texture.handle, ctx.textures)
+    sync.unlock(&ctx.lock)
+
+    if cmd.queue_type != .Main {
+        // TODO: Add mipmap generation on transfer/compute queues where supported.
+        log.error("cmd_generate_mipmaps: requires graphics-capable queue.")
+        return
+    }
+
+    vk_cmd_buf := cmd.handle
+    vk_format := to_vk_texture_format(texture.format)
+    props: vk.FormatProperties
+    vk.GetPhysicalDeviceFormatProperties(ctx.phys_device, vk_format, &props)
+    supports_linear := .SAMPLED_IMAGE_FILTER_LINEAR in props.optimalTilingFeatures
+    filter := vk.Filter.LINEAR if supports_linear else vk.Filter.NEAREST
+
+    plane_aspect: vk.ImageAspectFlags = { .DEPTH } if texture.format == .D32_Float else { .COLOR }
+    layer_count := max(u32(1), texture.layer_count)
+
+    for level := u32(0); level < texture.mip_count - 1; level += 1 {
+        src_width := max(u32(1), texture.dimensions.x >> level)
+        src_height := max(u32(1), texture.dimensions.y >> level)
+        src_depth := max(u32(1), texture.dimensions.z >> level)
+        dst_width := max(u32(1), src_width >> 1)
+        dst_height := max(u32(1), src_height >> 1)
+        dst_depth := max(u32(1), src_depth >> 1)
+
+        barriers: [2]vk.ImageMemoryBarrier
+        barrier_count := u32(0)
+
+        if level == 0 {
+            barriers[barrier_count] = {
+                sType = .IMAGE_MEMORY_BARRIER,
+                srcAccessMask = { .TRANSFER_WRITE },
+                dstAccessMask = { .TRANSFER_READ },
+                oldLayout = .GENERAL,
+                newLayout = .GENERAL,
+                image = tex_info.handle,
+                subresourceRange = {
+                    aspectMask = plane_aspect,
+                    baseMipLevel = level,
+                    levelCount = 1,
+                    baseArrayLayer = 0,
+                    layerCount = layer_count,
+                },
+            }
+            barrier_count += 1
+        }
+
+        barriers[barrier_count] = {
+            sType = .IMAGE_MEMORY_BARRIER,
+            srcAccessMask = {},
+            dstAccessMask = { .TRANSFER_WRITE },
+            oldLayout = .GENERAL,
+            newLayout = .GENERAL,
+            image = tex_info.handle,
+            subresourceRange = {
+                aspectMask = plane_aspect,
+                baseMipLevel = level + 1,
+                levelCount = 1,
+                baseArrayLayer = 0,
+                layerCount = layer_count,
+            },
+        }
+        barrier_count += 1
+
+        vk.CmdPipelineBarrier(
+            vk_cmd_buf,
+            { .TRANSFER },
+            { .TRANSFER },
+            {},
+            0,
+            nil,
+            0,
+            nil,
+            barrier_count,
+            &barriers[0],
+        )
+
+        blit := vk.ImageBlit {
+            srcSubresource = {
+                aspectMask = plane_aspect,
+                mipLevel = level,
+                baseArrayLayer = 0,
+                layerCount = layer_count,
+            },
+            srcOffsets = {
+                {0, 0, 0},
+                {i32(src_width), i32(src_height), i32(src_depth)},
+            },
+            dstSubresource = {
+                aspectMask = plane_aspect,
+                mipLevel = level + 1,
+                baseArrayLayer = 0,
+                layerCount = layer_count,
+            },
+            dstOffsets = {
+                {0, 0, 0},
+                {i32(dst_width), i32(dst_height), i32(dst_depth)},
+            },
+        }
+
+        vk.CmdBlitImage(
+            vk_cmd_buf,
+            tex_info.handle,
+            .GENERAL,
+            tex_info.handle,
+            .GENERAL,
+            1,
+            &blit,
+            filter,
+        )
+
+        mip_read_barrier := vk.ImageMemoryBarrier {
+            sType = .IMAGE_MEMORY_BARRIER,
+            srcAccessMask = { .TRANSFER_WRITE },
+            dstAccessMask = { .TRANSFER_READ },
+            oldLayout = .GENERAL,
+            newLayout = .GENERAL,
+            image = tex_info.handle,
+            subresourceRange = {
+                aspectMask = plane_aspect,
+                baseMipLevel = level + 1,
+                levelCount = 1,
+                baseArrayLayer = 0,
+                layerCount = layer_count,
+            },
+        }
+        vk.CmdPipelineBarrier(
+            vk_cmd_buf,
+            { .TRANSFER },
+            { .TRANSFER },
+            {},
+            0,
+            nil,
+            0,
+            nil,
+            1,
+            &mip_read_barrier,
+        )
+    }
 }
 
 _supports_texture_format :: proc(format: Texture_Format) -> bool
@@ -2939,30 +3120,36 @@ vk_acquire_cmd_buf :: proc(queue: Queue) -> ^Command_Buffer_Info
     queue_type := queue_info.queue_type
 
     // Check whether there is a free command buffer available with a timeline value that is less than or equal to the current semaphore value
-    if handle, ok := priority_queue.pop_safe(&tls_ctx.free_buffers[queue_type]); ok {
-        buf := get_resource(handle.pool_handle, ctx.command_buffers)
-        ensure(buf.recording == false, "Command buffer on the free list is still recording")
-
-        current_semaphore_value: u64
-        vk_check(vk.GetSemaphoreCounterValue(ctx.device, ctx.cmd_bufs_timelines[queue_type].sem, &current_semaphore_value))
-
-        if current_semaphore_value >= buf.timeline_value {
-            buf.recording = true
-            buf.queue = queue
-            buf.queue_type = queue_type
-
-            if buf.compute_shader != nil {
-                shader_info := get_resource(buf.compute_shader, ctx.shaders)
-                delete_key(&shader_info.command_buffers, buf.pool_handle)
-                buf.compute_shader = {}
+    for {
+        if handle, ok := priority_queue.pop_safe(&tls_ctx.free_buffers[queue_type]); ok {
+            buf := get_resource(handle.pool_handle, ctx.command_buffers)
+            if buf.recording {
+                // TODO: Investigate why a recording command buffer ends up in the free list.
+                continue
             }
 
-            buf.thread_id = sync.current_thread_id()
+            current_semaphore_value: u64
+            vk_check(vk.GetSemaphoreCounterValue(ctx.device, ctx.cmd_bufs_timelines[queue_type].sem, &current_semaphore_value))
 
-            return buf
-        } else {
-            priority_queue.push(&tls_ctx.free_buffers[queue_type], handle)
+            if current_semaphore_value >= buf.timeline_value {
+                buf.recording = true
+                buf.queue = queue
+                buf.queue_type = queue_type
+
+                if buf.compute_shader != nil {
+                    shader_info := get_resource(buf.compute_shader, ctx.shaders)
+                    delete_key(&shader_info.command_buffers, buf.pool_handle)
+                    buf.compute_shader = {}
+                }
+
+                buf.thread_id = sync.current_thread_id()
+
+                return buf
+            } else {
+                priority_queue.push(&tls_ctx.free_buffers[queue_type], handle)
+            }
         }
+        break
     }
 
     buf: Command_Buffer_Info
@@ -3244,6 +3431,16 @@ to_vk_texture_usage :: proc(usage: Usage_Flags) -> vk.ImageUsageFlags
     if .Color_Attachment in usage do         res += { .COLOR_ATTACHMENT }
     if .Depth_Stencil_Attachment in usage do res += { .DEPTH_STENCIL_ATTACHMENT }
     return res
+}
+
+@(private="file")
+to_vk_texture_usage_with_transfers :: proc(desc: Texture_Desc, mip_count: u32) -> vk.ImageUsageFlags
+{
+    usage := to_vk_texture_usage(desc.usage) + { .TRANSFER_DST }
+    if mip_count > 1 {
+        usage += { .TRANSFER_SRC }
+    }
+    return usage
 }
 
 @(private="file")

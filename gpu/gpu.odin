@@ -134,6 +134,8 @@ Render_Pass_Desc :: struct
 Texture :: struct #all_or_none
 {
     dimensions: [3]u32,
+    mip_count: u32,
+    layer_count: u32,
     format: Texture_Format,
     handle: Texture_Handle
 }
@@ -293,6 +295,7 @@ commands_begin: proc(queue: Queue) -> Command_Buffer : _commands_begin
 cmd_mem_copy: proc(cmd_buf: Command_Buffer, src, dst: rawptr, #any_int bytes: i64) : _cmd_mem_copy
 cmd_copy_to_texture: proc(cmd_buf: Command_Buffer, texture: Texture, src: rawptr) : _cmd_copy_to_texture
 cmd_copy_mips_to_texture: proc(cmd_buf: Command_Buffer, texture: Texture, src_buffer: rawptr, regions: []Mip_Copy_Region) : _cmd_copy_mips_to_texture
+cmd_generate_mipmaps: proc(cmd_buf: Command_Buffer, texture: Texture) : _cmd_generate_mipmaps
 
 cmd_set_desc_heap: proc(cmd_buf: Command_Buffer, textures, textures_rw, samplers, bvhs: rawptr) : _cmd_set_desc_heap
 
