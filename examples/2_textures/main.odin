@@ -232,7 +232,7 @@ load_texture :: proc(bytes: []byte, upload_arena: ^gpu.Arena, cmd_buf: gpu.Comma
         format = .RGBA8_Unorm,
         usage = { .Sampled },
     })
-    gpu.cmd_copy_to_texture(cmd_buf, texture, staging_gpu, texture.mem)
+    gpu.cmd_copy_to_texture(cmd_buf, texture, staging_gpu)
     return texture
 }
 

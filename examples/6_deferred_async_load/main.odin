@@ -654,7 +654,7 @@ create_magenta_texture :: proc(
 			usage = {.Sampled},
 		},
 	)
-	gpu.cmd_copy_to_texture(cmd_buf, texture, staging_gpu, texture.mem)
+	gpu.cmd_copy_to_texture(cmd_buf, texture, staging_gpu)
 	gpu.set_texture_desc(
 		texture_heap,
 		shared.MISSING_TEXTURE_ID,
@@ -884,7 +884,7 @@ load_texture_from_gltf :: proc(
 	)
 	if sync.guard(&mutex) do append(&loaded_textures, texture)
 
-	gpu.cmd_copy_to_texture(cmd_buf, texture, staging_gpu, texture.mem)
+	gpu.cmd_copy_to_texture(cmd_buf, texture, staging_gpu)
 	return texture
 }
 

@@ -22,6 +22,13 @@ Texture_Descriptor :: struct { bytes: [4]u64 }
 Sampler_Descriptor :: struct { bytes: [2]u64 }
 BVH_Descriptor :: struct { bytes: [2]u64 }
 
+Mip_Copy_Region :: struct {
+	src_offset:  uintptr, // Offset in staging buffer
+	mip_level:   u32,
+	array_layer: u32,
+	layer_count: u32,
+}
+
 // Enums
 Feature :: enum { Raytracing = 0 }
 Features :: bit_set[Feature; u32]
@@ -29,7 +36,21 @@ Allocation_Type :: enum { Default = 0, Descriptors }
 Memory :: enum { Default = 0, GPU, Readback }
 Queue_Type :: enum { Main = 0, Compute, Transfer }
 Texture_Type :: enum { D2 = 0, D3, D1 }
-Texture_Format :: enum { Default = 0, RGBA8_Unorm, BGRA8_Unorm, D32_Float, RGBA16_Float }
+Texture_Format :: enum {
+	Default = 0,
+	RGBA8_Unorm,
+	BGRA8_Unorm,
+	D32_Float,
+	RGBA16_Float,
+	BC1_RGBA_Unorm,
+	BC3_RGBA_Unorm,
+	BC7_RGBA_Unorm,
+	ASTC_4x4_RGBA_Unorm,
+	ETC2_RGB8_Unorm,
+	ETC2_RGBA8_Unorm,
+	EAC_R11_Unorm,
+	EAC_RG11_Unorm,
+}
 Usage :: enum { Sampled = 0, Storage, Color_Attachment, Depth_Stencil_Attachment }
 Usage_Flags :: bit_set[Usage; u32]
 Shader_Type_Graphics :: enum { Vertex = 0, Fragment }
@@ -232,6 +253,7 @@ sampler_descriptor: proc(sampler_desc: Sampler_Desc) -> Sampler_Descriptor : _sa
 get_texture_view_descriptor_size: proc() -> u32 : _get_texture_view_descriptor_size
 get_texture_rw_view_descriptor_size: proc() -> u32 : _get_texture_rw_view_descriptor_size
 get_sampler_descriptor_size: proc() -> u32 : _get_sampler_descriptor_size
+supports_texture_format: proc(format: Texture_Format) -> bool : _supports_texture_format
 
 // Shaders
 shader_create: proc(code: []u32, type: Shader_Type_Graphics, entry_point_name: string = "main") -> Shader : _shader_create
@@ -269,7 +291,8 @@ commands_begin: proc(queue: Queue) -> Command_Buffer : _commands_begin
 
 // Commands
 cmd_mem_copy: proc(cmd_buf: Command_Buffer, src, dst: rawptr, #any_int bytes: i64) : _cmd_mem_copy
-cmd_copy_to_texture: proc(cmd_buf: Command_Buffer, texture: Texture, src, dst: rawptr) : _cmd_copy_to_texture
+cmd_copy_to_texture: proc(cmd_buf: Command_Buffer, texture: Texture, src: rawptr) : _cmd_copy_to_texture
+cmd_copy_mips_to_texture: proc(cmd_buf: Command_Buffer, texture: Texture, src_buffer: rawptr, regions: []Mip_Copy_Region) : _cmd_copy_mips_to_texture
 
 cmd_set_desc_heap: proc(cmd_buf: Command_Buffer, textures, textures_rw, samplers, bvhs: rawptr) : _cmd_set_desc_heap
 

@@ -1245,13 +1245,22 @@ _texture_create :: proc(desc: Texture_Desc, storage: rawptr, queue: Queue = nil,
         }
         vk_check(vk.BeginCommandBuffer(vk_cmd_buf, &cmd_buf_bi))
 
+        mip_levels := desc.mip_count
+        if mip_levels == 0 {
+            mip_levels = 1
+        }
+        layer_count := desc.layer_count
+        if layer_count == 0 {
+            layer_count = 1
+        }
+
         transition := vk.ImageMemoryBarrier2 {
             sType = .IMAGE_MEMORY_BARRIER_2,
             image = image,
             subresourceRange = {
                 aspectMask = plane_aspect,
-                levelCount = 1,
-                layerCount = 1,
+                levelCount = mip_levels,
+                layerCount = layer_count,
             },
             oldLayout = .UNDEFINED,
             newLayout = .GENERAL,
@@ -1909,37 +1918,82 @@ _cmd_mem_copy :: proc(cmd_buf: Command_Buffer, src, dst: rawptr, #any_int bytes:
     vk.CmdCopyBuffer(cmd_buf.handle, src_buf, dst_buf, u32(len(copy_regions)), raw_data(copy_regions))
 }
 
-// TODO: dst is ignored atm.
-_cmd_copy_to_texture :: proc(cmd_buf: Command_Buffer, texture: Texture, src, dst: rawptr)
+_cmd_copy_to_texture :: proc(cmd_buf: Command_Buffer, texture: Texture, src: rawptr)
+{
+    regions: [1]Mip_Copy_Region
+    regions[0] = {
+        src_offset = uintptr(0),
+        mip_level = 0,
+        array_layer = 0,
+        layer_count = 1,
+    }
+
+    cmd_copy_mips_to_texture(cmd_buf, texture, src, regions[:])
+}
+
+_cmd_copy_mips_to_texture :: proc(
+    cmd_buf: Command_Buffer,
+    texture: Texture,
+    src_buffer: rawptr,
+    regions: []Mip_Copy_Region,
+)
 {
     sync.lock(&ctx.lock)
-    cmd_buf := get_resource(cmd_buf, ctx.command_buffers)
+    cmd := get_resource(cmd_buf, ctx.command_buffers)
     tex_info := get_resource(texture.handle, ctx.textures)
     sync.unlock(&ctx.lock)
 
-    vk_image := tex_info.handle
-
-    src_buf, src_offset, ok_s := compute_buf_offset_from_gpu_ptr(src)
+    src_buf, base_offset, ok_s := compute_buf_offset_from_gpu_ptr(src_buffer)
     if !ok_s {
-        log.error("Alloc not found.")
+        fatal_error("Alloc not found.")
         return
     }
 
     plane_aspect: vk.ImageAspectFlags = { .DEPTH } if texture.format == .D32_Float else { .COLOR }
+    is_compressed := is_block_compressed(texture.format)
 
-    vk.CmdCopyBufferToImage(cmd_buf.handle, src_buf, vk_image, .GENERAL, 1, &vk.BufferImageCopy {
-        bufferOffset = vk.DeviceSize(src_offset),
-        bufferRowLength = texture.dimensions.x,
-        bufferImageHeight = texture.dimensions.y,
-        imageSubresource = {
-            aspectMask = plane_aspect,
-            mipLevel = 0,
-            baseArrayLayer = 0,
-            layerCount = 1,
-        },
-        imageOffset = {},
-        imageExtent = { texture.dimensions.x, texture.dimensions.y, texture.dimensions.z }
-    })
+    MAX_MIP_COPY_REGIONS :: 32
+    if len(regions) > MAX_MIP_COPY_REGIONS {
+        panic("cmd_copy_mips_to_texture: region count exceeds MAX_MIP_COPY_REGIONS")
+    }
+    vk_regions: [MAX_MIP_COPY_REGIONS]vk.BufferImageCopy
+
+    for region, i in regions {
+        mip_width := max(1, texture.dimensions.x >> region.mip_level)
+        mip_height := max(1, texture.dimensions.y >> region.mip_level)
+        mip_depth := max(1, texture.dimensions.z >> region.mip_level)
+
+        vk_regions[i] = vk.BufferImageCopy{
+            bufferOffset = vk.DeviceSize(uintptr(base_offset) + region.src_offset),
+            bufferRowLength = 0 if is_compressed else mip_width,
+            bufferImageHeight = 0 if is_compressed else mip_height,
+            imageSubresource = {
+                aspectMask = plane_aspect,
+                mipLevel = region.mip_level,
+                baseArrayLayer = region.array_layer,
+                layerCount = region.layer_count,
+            },
+            imageOffset = {},
+            imageExtent = { mip_width, mip_height, mip_depth },
+        }
+    }
+
+    vk.CmdCopyBufferToImage(
+        cmd.handle,
+        src_buf,
+        tex_info.handle,
+        .GENERAL,
+        u32(len(regions)),
+        &vk_regions[0],
+    )
+}
+
+_supports_texture_format :: proc(format: Texture_Format) -> bool
+{
+    vk_format := to_vk_texture_format(format)
+    props: vk.FormatProperties
+    vk.GetPhysicalDeviceFormatProperties(ctx.phys_device, vk_format, &props)
+    return .SAMPLED_IMAGE in props.optimalTilingFeatures
 }
 
 _cmd_set_desc_heap :: proc(cmd_buf: Command_Buffer, textures, textures_rw, samplers, bvhs: rawptr)
@@ -3135,8 +3189,35 @@ to_vk_texture_format :: proc(format: Texture_Format) -> vk.Format
         case .BGRA8_Unorm: return .B8G8R8A8_UNORM
         case .D32_Float: return .D32_SFLOAT
         case .RGBA16_Float: return .R16G16B16A16_SFLOAT
+        case .BC1_RGBA_Unorm: return .BC1_RGBA_UNORM_BLOCK
+        case .BC3_RGBA_Unorm: return .BC3_UNORM_BLOCK
+        case .BC7_RGBA_Unorm: return .BC7_UNORM_BLOCK
+        case .ASTC_4x4_RGBA_Unorm: return .ASTC_4x4_UNORM_BLOCK
+        case .ETC2_RGB8_Unorm: return .ETC2_R8G8B8_UNORM_BLOCK
+        case .ETC2_RGBA8_Unorm: return .ETC2_R8G8B8A8_UNORM_BLOCK
+        case .EAC_R11_Unorm: return .EAC_R11_UNORM_BLOCK
+        case .EAC_RG11_Unorm: return .EAC_R11G11_UNORM_BLOCK
     }
     return {}
+}
+
+@(private="file")
+is_block_compressed :: #force_inline proc(format: Texture_Format) -> bool
+{
+    #partial switch format
+    {
+        case .BC1_RGBA_Unorm,
+             .BC3_RGBA_Unorm,
+             .BC7_RGBA_Unorm,
+             .ASTC_4x4_RGBA_Unorm,
+             .ETC2_RGB8_Unorm,
+             .ETC2_RGBA8_Unorm,
+             .EAC_R11_Unorm,
+             .EAC_RG11_Unorm:
+            return true
+        case:
+    }
+    return false
 }
 
 @(private="file")
