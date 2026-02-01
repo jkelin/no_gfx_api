@@ -131,6 +131,14 @@ Render_Pass_Desc :: struct
     stencil_attachment: Maybe(Render_Attachment),
 }
 
+Rectangle :: struct
+{
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+}
+
 Texture :: struct #all_or_none
 {
     dimensions: [3]u32,
@@ -298,6 +306,7 @@ cmd_copy_mips_to_texture: proc(cmd_buf: Command_Buffer, texture: Texture, src_bu
 cmd_generate_mipmaps: proc(cmd_buf: Command_Buffer, texture: Texture) : _cmd_generate_mipmaps
 
 cmd_set_desc_heap: proc(cmd_buf: Command_Buffer, textures, textures_rw, samplers, bvhs: rawptr) : _cmd_set_desc_heap
+cmd_set_viewport_scissor: proc(cmd_buf: Command_Buffer, rect: Rectangle) : _cmd_set_viewport_scissor
 
 cmd_barrier: proc(cmd_buf: Command_Buffer, before: Stage, after: Stage, hazards: Hazard_Flags = {}) : _cmd_barrier
 //cmd_signal_after: proc() : _cmd_signal_after

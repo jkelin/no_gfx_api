@@ -79,6 +79,7 @@ Input :: struct {
 	keys:                 #sparse[sdl.Scancode]Key_State,
 	mouse_dx:             f32, // pixels/dpi (inches), right is positive
 	mouse_dy:             f32, // pixels/dpi (inches), up is positive
+	mouse_wheel:          f32, // pixels/dpi (inches), up is positive
 }
 
 INPUT: Input
@@ -92,7 +93,7 @@ handle_window_events :: proc(window: ^sdl.Window) -> (proceed: bool) {
 	INPUT.mouse_dx = 0
 	INPUT.mouse_dy = 0
 	INPUT.left_click_pressed = false
-
+	INPUT.mouse_wheel = 0
 	event: sdl.Event
 	proceed = true
 	for sdl.PollEvent(&event) {
@@ -139,6 +140,11 @@ handle_window_events :: proc(window: ^sdl.Window) -> (proceed: bool) {
 				event := event.motion
 				INPUT.mouse_dx += event.xrel
 				INPUT.mouse_dy -= event.yrel // In sdl, up is negative
+			}
+		case .MOUSE_WHEEL:
+			{
+				event := event.wheel
+				INPUT.mouse_wheel += event.y
 			}
 		}
 	}
@@ -211,6 +217,112 @@ first_person_camera_view :: proc(delta_time: f32) -> matrix[4, 4]f32 {
 		if dist <= delta do return target
 		return cur + diff / dist * delta
 	}
+}
+
+// Orbit camera that rotates around a fixed origin point
+orbit_camera_view :: proc(
+	delta_time: f32,
+	default_position: [3]f32 = {0, 0, 5},
+	origin: [3]f32 = {0, 0, 0},
+) -> matrix[4, 4]f32 {
+	@(static) initialized: bool
+	@(static) azimuth: f32 // Horizontal rotation angle (around Y axis)
+	@(static) elevation: f32 // Vertical rotation angle (pitch)
+	@(static) distance: f32 // Distance from origin
+
+	if !initialized {
+		// Calculate initial spherical coordinates from default position
+		offset := default_position - origin
+		distance = linalg.length(offset)
+
+		if distance < 0.001 {
+			// Default position is at origin, use default values
+			distance = 5.0
+			azimuth = 0.0
+			elevation = 0.0
+		} else {
+			// Calculate azimuth (horizontal angle)
+			azimuth = math.atan2(offset.x, offset.z)
+
+			// Calculate elevation (vertical angle)
+			horizontal_dist := math.sqrt(offset.x * offset.x + offset.z * offset.z)
+			elevation = math.atan2(offset.y, horizontal_dist)
+		}
+
+		initialized = true
+	}
+
+	// Mouse input for rotation
+	mouse_sensitivity := math.to_radians_f32(0.2) // Radians per pixel
+	if INPUT.pressing_right_click {
+		azimuth += INPUT.mouse_dx * mouse_sensitivity
+		elevation -= INPUT.mouse_dy * mouse_sensitivity
+	}
+
+	// Wrap azimuth
+	for azimuth < 0 do azimuth += 2 * math.PI
+	for azimuth > 2 * math.PI do azimuth -= 2 * math.PI
+
+	// Clamp elevation to prevent gimbal lock
+	elevation = clamp(elevation, math.to_radians_f32(-89), math.to_radians_f32(89))
+
+	// Mouse wheel input for zoom (distance adjustment) with interpolation
+	@(static) target_distance: f32
+	@(static) target_distance_initialized: bool
+	if !target_distance_initialized {
+		target_distance = distance
+		target_distance_initialized = true
+	}
+
+	zoom_speed: f32 : 1.5 // Distance change per wheel tick
+	zoom_factor: f32 : 4.0 // Linear interpolation factor (percentage per second)
+	if INPUT.mouse_wheel != 0 {
+		target_distance -= INPUT.mouse_wheel * zoom_speed
+		target_distance = max(target_distance, 1.5) // Minimum distance
+		target_distance = min(target_distance, 50.0) // Maximum distance (reasonable limit)
+	}
+
+	// Linear interpolation: speed proportional to current distance
+	// Closer = slower zoom, further = faster zoom
+	distance_diff := target_distance - distance
+	if abs(distance_diff) > 0.001 {
+		// Interpolate based on percentage of current distance
+		max_change := distance * zoom_factor * delta_time
+		if abs(distance_diff) <= max_change {
+			distance = target_distance
+		} else {
+			distance += math.sign(distance_diff) * max_change
+		}
+	}
+
+	// Calculate camera position from spherical coordinates
+	cos_elev := math.cos(elevation)
+	cam_pos :=
+		origin +
+		[3]f32 {
+				distance * math.sin(azimuth) * cos_elev,
+				distance * math.sin(elevation),
+				distance * math.cos(azimuth) * cos_elev,
+			}
+
+	// Calculate forward direction from camera to origin to build quaternion
+	forward := linalg.normalize(origin - cam_pos)
+
+	// Calculate angles from forward vector (matching first-person camera convention)
+	// azimuth (yaw) is rotation around Y axis
+	forward_azimuth := math.atan2(forward.x, forward.z)
+
+	// elevation (pitch) is rotation around X axis
+	forward_horizontal_dist := math.sqrt(forward.x * forward.x + forward.z * forward.z)
+	forward_elevation := math.atan2(forward.y, forward_horizontal_dist)
+
+	// Build quaternion using same method as first-person camera
+	cam_rot: quaternion128 = 1
+	y_rot := linalg.quaternion_angle_axis(forward_elevation, [3]f32{-1, 0, 0})
+	x_rot := linalg.quaternion_angle_axis(forward_azimuth, [3]f32{0, 1, 0})
+	cam_rot = x_rot * y_rot
+
+	return world_to_view_mat(cam_pos, cam_rot)
 }
 
 world_to_view_mat :: proc(cam_pos: [3]f32, cam_rot: quaternion128) -> matrix[4, 4]f32 {

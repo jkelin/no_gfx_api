@@ -1452,14 +1452,14 @@ _sampler_descriptor :: proc(sampler_desc: Sampler_Desc) -> Sampler_Descriptor
         addressModeU = to_vk_address_mode(sampler_desc.address_mode_u),
         addressModeV = to_vk_address_mode(sampler_desc.address_mode_v),
         addressModeW = to_vk_address_mode(sampler_desc.address_mode_w),
-        anisotropyEnable = true,
-        maxAnisotropy = 16,
-        compareEnable = false,
-        compareOp = .NEVER,
-        minLod = 0,
-        maxLod = 0xfffffff,
-        borderColor = .FLOAT_TRANSPARENT_BLACK,
-        unnormalizedCoordinates = false,
+        // anisotropyEnable = true,
+        // maxAnisotropy = 16,
+        // compareEnable = false,
+        // compareOp = .NEVER,
+        // minLod = 0,
+        // maxLod = 0xfffffff,
+        // borderColor = .FLOAT_TRANSPARENT_BLACK,
+        // unnormalizedCoordinates = false,
     }
     sampler := get_or_add_sampler(sampler_ci)
 
@@ -2401,6 +2401,31 @@ _cmd_set_depth_state :: proc(cmd_buf: Command_Buffer, state: Depth_State)
     vk.CmdSetDepthBiasEnable(vk_cmd_buf, false)
     vk.CmdSetDepthClipEnableEXT(vk_cmd_buf, true)
     vk.CmdSetStencilTestEnable(vk_cmd_buf, false)
+}
+
+_cmd_set_viewport_scissor :: proc(cmd_buf: Command_Buffer, rect: Rectangle)
+{
+    sync.lock(&ctx.lock)
+    cmd_buf := get_resource(cmd_buf, ctx.command_buffers)
+    sync.unlock(&ctx.lock)
+
+    vk_cmd_buf := cmd_buf.handle
+
+    viewport := vk.Viewport {
+        x = f32(rect.x),
+        y = f32(rect.y),
+        width = f32(rect.width),
+        height = f32(rect.height),
+        minDepth = 0.0,
+        maxDepth = 1.0,
+    }
+    vk.CmdSetViewport(vk_cmd_buf, 0, 1, &viewport)
+
+    scissor := vk.Rect2D {
+        offset = { x = i32(rect.x), y = i32(rect.y) },
+        extent = { width = rect.width, height = rect.height },
+    }
+    vk.CmdSetScissor(vk_cmd_buf, 0, 1, &scissor)
 }
 
 _cmd_set_blend_state :: proc(cmd_buf: Command_Buffer, state: Blend_State)

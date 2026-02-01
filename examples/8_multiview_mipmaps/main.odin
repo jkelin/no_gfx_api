@@ -1,0 +1,408 @@
+
+package main
+
+import log "core:log"
+import "../../gpu"
+import "core:math"
+import "core:math/linalg"
+import "core:fmt"
+import intr "base:intrinsics"
+
+import "core:image"
+import "core:image/png"
+import "base:runtime"
+import "core:sync"
+
+import sdl "vendor:sdl3"
+
+import shared "../shared"
+import gltf2 "../shared/gltf2"
+
+Start_Window_Size_X :: 1000
+Start_Window_Size_Y :: 1000
+Frames_In_Flight :: 3
+Example_Name :: "Multiview Mipmaps"
+
+Scene_Plane_Grid :: #load("./plane_grid.glb")
+
+Scene_Type :: enum {
+    Plane_Grid,
+}
+
+main :: proc()
+{
+    fmt.println("Right-click + WASD for first-person controls.")
+
+    ok_i := sdl.Init({ .VIDEO })
+    assert(ok_i)
+
+    console_logger := log.create_console_logger()
+    defer log.destroy_console_logger(console_logger)
+    context.logger = console_logger
+
+    ts_freq := sdl.GetPerformanceFrequency()
+    max_delta_time: f32 = 1.0 / 10.0  // 10fps
+
+    window_flags :: sdl.WindowFlags {
+        .HIGH_PIXEL_DENSITY,
+        .VULKAN,
+        .RESIZABLE,
+    }
+    window := sdl.CreateWindow(Example_Name, Start_Window_Size_X, Start_Window_Size_Y, window_flags)
+    ensure(window != nil)
+
+    window_size_x := i32(Start_Window_Size_X)
+    window_size_y := i32(Start_Window_Size_Y)
+
+    gpu.init()
+    defer gpu.cleanup()
+
+    gpu.swapchain_init_from_sdl(window, Frames_In_Flight)
+
+    texture_heap := gpu.mem_alloc(size_of(gpu.Texture_Descriptor) * 65536, alloc_type = .Descriptors)
+    defer gpu.mem_free(texture_heap)
+    sampler_heap := gpu.mem_alloc(size_of(gpu.Sampler_Descriptor) * 10, alloc_type = .Descriptors)
+    defer gpu.mem_free(sampler_heap)
+
+    gpu.set_sampler_desc(sampler_heap, 0, gpu.sampler_descriptor({}))
+
+    depth_desc := gpu.Texture_Desc {
+        dimensions = { u32(window_size_x), u32(window_size_y), 1 },
+        format = .D32_Float,
+        mip_count = 1,
+        layer_count = 1,
+        sample_count = 1,
+        usage = { .Depth_Stencil_Attachment },
+    }
+    depth_texture := gpu.alloc_and_create_texture(depth_desc)
+    defer gpu.free_and_destroy_texture(&depth_texture)
+
+    vert_shader := gpu.shader_create(#load("shaders/test.vert.spv", []u32), .Vertex)
+    frag_shader := gpu.shader_create(#load("shaders/test.frag.spv", []u32), .Fragment)
+    defer {
+        gpu.shader_destroy(vert_shader)
+        gpu.shader_destroy(frag_shader)
+    }
+
+    upload_arena := gpu.arena_init(1024 * 1024 * 1024)
+    defer gpu.arena_destroy(&upload_arena)
+
+    meshes_gpu: [dynamic]Mesh_GPU
+    defer {
+        for &mesh_gpu in meshes_gpu do mesh_destroy(&mesh_gpu)
+        delete(meshes_gpu)
+    }
+
+    loadable_scenes := [Scene_Type][]u8 {
+        .Plane_Grid = Scene_Plane_Grid,
+    }
+    scenes: [Scene_Type]shared.Scene
+    scenes_gltf: [Scene_Type]^gltf2.Data
+    defer {
+        for type in Scene_Type {
+            shared.destroy_scene(&scenes[type])
+            gltf2.unload(scenes_gltf[type])
+        }
+    }
+
+    textures: [dynamic]gpu.Owned_Texture
+    defer {
+        for &texture in textures do gpu.free_and_destroy_texture(&texture)
+    }
+
+    queue := gpu.get_queue(.Main)
+    upload_cmd_buf := gpu.commands_begin(queue)
+
+    // We are loading multiple scenes so we need to translate texture and mesh indices to be unique across all scenes
+    mesh_counter := u32(0)
+    texture_counter := u32(0)
+
+    for type in Scene_Type {
+        scene, gltf_textures, gltf := shared.load_scene_gltf(loadable_scenes[type])
+
+        scenes[type] = scene
+        scenes_gltf[type] = gltf
+
+        for &instance in scene.instances {
+            instance.mesh_idx += mesh_counter
+        }
+
+        for mesh in scene.meshes {
+            log.debug("mesh base_color_map: ", mesh.base_color_map + texture_counter)
+            append(&meshes_gpu, upload_mesh(&upload_arena, upload_cmd_buf, mesh, mesh.base_color_map + texture_counter))
+            mesh_counter += 1
+        }
+
+        // for texture in gltf_textures {
+        //     texture := load_texture_from_gltf(
+        //         gltf.images[texture.image_index],
+        //         gltf,
+        //         &upload_arena,
+        //         upload_cmd_buf,
+        //         queue,
+        //     )
+        //     append(&textures, texture)
+        //     log.debug("texture: ", texture_counter)
+        //     gpu.set_texture_desc(texture_heap, texture_counter, gpu.texture_view_descriptor(texture, { format = .RGBA8_Unorm }))
+        //     texture_counter += 1
+        // }
+    }
+
+    gpu.cmd_barrier(upload_cmd_buf, .Transfer, .All, {})
+    gpu.queue_submit(queue, { upload_cmd_buf })
+
+    now_ts := sdl.GetPerformanceCounter()
+
+    frame_arenas: [Frames_In_Flight]gpu.Arena
+    for &frame_arena in frame_arenas do frame_arena = gpu.arena_init(10 * 1024 * 1024)
+    defer for &frame_arena in frame_arenas do gpu.arena_destroy(&frame_arena)
+    next_frame := u64(1)
+    frame_sem := gpu.semaphore_create(0)
+    defer gpu.semaphore_destroy(&frame_sem)
+    for true
+    {
+        proceed := shared.handle_window_events(window)
+        if !proceed do break
+
+        old_window_size_x := window_size_x
+        old_window_size_y := window_size_y
+        sdl.GetWindowSize(window, &window_size_x, &window_size_y)
+        if .MINIMIZED in sdl.GetWindowFlags(window) || window_size_x <= 0 || window_size_y <= 0
+        {
+            sdl.Delay(16)
+            continue
+        }
+
+        if next_frame > Frames_In_Flight {
+            gpu.semaphore_wait(frame_sem, next_frame - Frames_In_Flight)
+        }
+        if old_window_size_x != window_size_x || old_window_size_y != window_size_y
+        {
+            gpu.queue_wait_idle(queue)
+            gpu.swapchain_resize({ u32(max(0, window_size_x)), u32(max(0, window_size_y)) })
+            depth_desc.dimensions.x = u32(window_size_x)
+            depth_desc.dimensions.y = u32(window_size_y)
+            gpu.free_and_destroy_texture(&depth_texture)
+            depth_texture = gpu.alloc_and_create_texture(depth_desc)
+        }
+
+        last_ts := now_ts
+        now_ts = sdl.GetPerformanceCounter()
+        delta_time := min(max_delta_time, f32(f64((now_ts - last_ts)*1000) / f64(ts_freq)) / 1000.0)
+
+        world_to_view := shared.orbit_camera_view(delta_time, {0, 50, 50})
+        aspect_ratio := f32(window_size_x) / f32(window_size_y)
+        view_to_proj := linalg.matrix4_perspective_f32(math.RAD_PER_DEG * 59.0, aspect_ratio, 0.1, 1000.0, false)
+
+        frame_arena := &frame_arenas[next_frame % Frames_In_Flight]
+
+        swapchain := gpu.swapchain_acquire_next()  // Blocks CPU until at least one frame is available.
+
+        cmd_buf := gpu.commands_begin(queue)
+        gpu.cmd_begin_render_pass(cmd_buf, {
+            color_attachments = {
+                { texture = swapchain, clear_color = { 0.7, 0.7, 0.7, 1.0 } }
+            },
+            depth_attachment = gpu.Render_Attachment {
+                texture = depth_texture, clear_color = 1.0
+            },
+        })
+        gpu.cmd_set_shaders(cmd_buf, vert_shader, frag_shader)
+
+        gpu.cmd_set_depth_state(cmd_buf, { mode = { .Read, .Write }, compare = .Less })
+
+    // Split the framebuffer into a 4x4 grid using viewport + scissor.
+    grid_width :: 4
+    tile_width := u32(max(1, window_size_x / grid_width))
+    tile_height := u32(max(1, window_size_y / len(Scene_Type)))
+    for type, grid_y in Scene_Type {
+        for grid_x in 0 ..< grid_width {
+            tile_x := u32(grid_x) * tile_width
+            tile_y := u32(grid_y) * tile_height
+
+            gpu.cmd_set_viewport_scissor(cmd_buf, {
+                x = tile_x,
+                y = tile_y,
+                width = u32(min(tile_width, u32(window_size_x) - tile_x)),
+                height = u32(min(tile_height, u32(window_size_y) - tile_y)),
+            })
+
+            for instance in scenes[type].instances
+            {
+                mesh := meshes_gpu[instance.mesh_idx]
+
+                Vert_Data :: struct #all_or_none {
+                    positions: rawptr,
+                    uvs: rawptr,
+                    model_to_world: [16]f32,
+                    model_to_world_normal: [16]f32,
+                    world_to_view: [16]f32,
+                    view_to_proj: [16]f32,
+                }
+                #assert(size_of(Vert_Data) == 8+8+64+64+64+64)
+
+                Frag_Data :: struct #all_or_none {
+                    texture_id: u32,
+                    sampler_id: u32,
+                }
+                frag_data := gpu.arena_alloc(frame_arena, Frag_Data)
+                frag_data.cpu^ = {
+                    texture_id = mesh.texture_id,
+                    sampler_id = 0,
+                }
+                verts_data := gpu.arena_alloc(frame_arena, Vert_Data)
+                verts_data.cpu^ = {
+                    positions = mesh.pos,
+                    uvs = mesh.uvs,
+                    model_to_world = intr.matrix_flatten(instance.transform),
+                    model_to_world_normal = intr.matrix_flatten(linalg.transpose(linalg.inverse(instance.transform))),
+                    world_to_view = intr.matrix_flatten(world_to_view),
+                    view_to_proj = intr.matrix_flatten(view_to_proj),
+                }
+
+                gpu.cmd_draw_indexed_instanced(cmd_buf, verts_data.gpu, frag_data.gpu, mesh.indices, mesh.idx_count, 1)
+            }
+        }
+    }
+
+        gpu.cmd_end_render_pass(cmd_buf)
+        gpu.queue_submit(queue, { cmd_buf }, frame_sem, next_frame)
+
+        gpu.swapchain_present(queue, frame_sem, next_frame)
+        next_frame += 1
+
+        gpu.arena_free_all(frame_arena)
+    }
+
+    gpu.wait_idle()
+}
+
+Mesh_GPU :: struct
+{
+    pos: rawptr,
+    normals: rawptr,
+    uvs: rawptr,
+    indices: rawptr,
+    idx_count: u32,
+    texture_id: u32,
+}
+
+upload_mesh :: proc(upload_arena: ^gpu.Arena, cmd_buf: gpu.Command_Buffer, mesh: shared.Mesh, texture_id: u32) -> Mesh_GPU
+{
+    assert(len(mesh.pos) == len(mesh.normals))
+    assert(len(mesh.pos) == len(mesh.uvs))
+
+    positions_staging := gpu.arena_alloc_array(upload_arena, [4]f32, len(mesh.pos))
+    normals_staging := gpu.arena_alloc_array(upload_arena, [4]f32, len(mesh.normals))
+    uvs_staging := gpu.arena_alloc_array(upload_arena, [2]f32, len(mesh.uvs))
+    indices_staging := gpu.arena_alloc_array(upload_arena, u32, len(mesh.indices))
+    copy(positions_staging.cpu, mesh.pos[:])
+    copy(normals_staging.cpu, mesh.normals[:])
+    copy(uvs_staging.cpu, mesh.uvs[:])
+    copy(indices_staging.cpu, mesh.indices[:])
+
+    res: Mesh_GPU
+    res.pos = gpu.mem_alloc_typed_gpu([4]f32, len(mesh.pos))
+    res.normals = gpu.mem_alloc_typed_gpu([4]f32, len(mesh.normals))
+    res.uvs = gpu.mem_alloc_typed_gpu([2]f32, len(mesh.uvs))
+    res.indices = gpu.mem_alloc_typed_gpu(u32, len(mesh.indices))
+    res.idx_count = u32(len(mesh.indices))
+    gpu.cmd_mem_copy(cmd_buf, positions_staging.gpu, res.pos, u64(len(mesh.pos) * size_of(mesh.pos[0])))
+    gpu.cmd_mem_copy(cmd_buf, normals_staging.gpu, res.normals, u64(len(mesh.normals) * size_of(mesh.normals[0])))
+    gpu.cmd_mem_copy(cmd_buf, uvs_staging.gpu, res.uvs, u64(len(mesh.uvs) * size_of(mesh.uvs[0])))
+    gpu.cmd_mem_copy(cmd_buf, indices_staging.gpu, res.indices, u64(len(mesh.indices) * size_of(mesh.indices[0])))
+    res.texture_id = texture_id
+    return res
+}
+
+mesh_destroy :: proc(mesh: ^Mesh_GPU)
+{
+    gpu.mem_free(mesh.pos)
+    gpu.mem_free(mesh.normals)
+    gpu.mem_free(mesh.uvs)
+    gpu.mem_free(mesh.indices)
+    mesh^ = {}
+}
+
+load_texture_from_gltf :: proc(
+	image_data: gltf2.Image,
+	data: ^gltf2.Data,
+	upload_arena: ^gpu.Arena,
+	cmd_buf: gpu.Command_Buffer,
+	queue: gpu.Queue = nil,
+) -> gpu.Owned_Texture {
+	image_bytes: []byte
+
+	if image_data.buffer_view != nil {
+		buffer_view_idx := image_data.buffer_view.?
+		buffer_view := data.buffer_views[buffer_view_idx]
+		buffer := data.buffers[buffer_view.buffer]
+
+		switch v in buffer.uri {
+		case []byte:
+			start_byte := buffer_view.byte_offset
+			end_byte := start_byte + buffer_view.byte_length
+			image_bytes = v[start_byte:end_byte]
+		case string:
+			log.error("String URIs not supported for buffer_view images")
+			assert(false, "String URIs not supported for buffer_view images")
+			return {}
+		case:
+			log.error("Unknown buffer URI type")
+			assert(false, "Unknown buffer URI type")
+			return {}
+		}
+	} else {
+		switch v in image_data.uri {
+		case []byte:
+			image_bytes = v
+		case string:
+			log.error(fmt.tprintf("String URIs not supported for texture loading: %v", v))
+			assert(false, "String URIs not supported for texture loading")
+			return {}
+		case:
+			log.error("Image has neither buffer_view nor valid URI")
+			assert(false, "Image has neither buffer_view nor valid URI")
+			return {}
+		}
+	}
+
+	if len(image_bytes) == 0 {
+		log.error("Image bytes are empty")
+		assert(false, "Image bytes are empty")
+		return {}
+	}
+
+	options := image.Options{.alpha_add_if_missing}
+	img, err := image.load_from_bytes(image_bytes, options)
+	if err != nil {
+		log.error(
+			fmt.tprintf(
+				"Failed to load image from bytes: %v, image size: %v bytes",
+				err,
+				len(image_bytes),
+			),
+		)
+		assert(false, "Could not load texture from GLTF image.")
+		return {}
+	}
+	defer image.destroy(img)
+
+	staging, staging_gpu := gpu.arena_alloc_untyped(upload_arena, u64(len(img.pixels.buf)))
+	runtime.mem_copy(staging, raw_data(img.pixels.buf), len(img.pixels.buf))
+
+	texture := gpu.alloc_and_create_texture(
+		{
+			type = .D2,
+			dimensions = {u32(img.width), u32(img.height), 1},
+			layer_count = 1,
+			sample_count = 1,
+			format = .RGBA8_Unorm,
+			usage = {.Sampled},
+		},
+		queue,
+	)
+
+	gpu.cmd_copy_to_texture(cmd_buf, texture, staging_gpu)
+	return texture
+}
