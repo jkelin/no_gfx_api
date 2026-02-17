@@ -25,7 +25,7 @@ BVH_Descriptor :: struct { bytes: [4]u64 }
 // Enums
 Feature :: enum { Raytracing = 0 }
 Features :: bit_set[Feature; u32]
-Allocation_Type :: enum { Default = 0, Descriptors }
+Allocation_Type :: enum { Default = 0, Descriptors, Texture }
 Memory :: enum { Default = 0, GPU, Readback }
 Queue :: enum { Main = 0, Compute, Transfer }
 Texture_Type :: enum { D2 = 0, D3, D1 }
@@ -564,7 +564,7 @@ Owned_Texture :: struct
 texture_alloc_and_create :: proc(desc: Texture_Desc, queue: Queue = nil, signal_sem: Semaphore = {}, signal_value: u64 = 0, name := "", loc := #caller_location) -> Owned_Texture
 {
     size, align := texture_size_and_align(desc)
-    ptr := mem_alloc_raw(size, 1, align, .GPU, loc = loc)
+    ptr := mem_alloc_raw(size, 1, align, .GPU, .Texture, loc = loc)
     texture := texture_create(desc, ptr, queue, signal_sem, signal_value, name = name, loc = loc)
     return Owned_Texture { texture, ptr.gpu }
 }

@@ -38,10 +38,17 @@ Compute_Shader_Push_Constants :: struct #packed {
 Alloc_Handle :: distinct Handle
 
 @(private="file")
+Internal_Feature :: enum { Host_Image_Copy = 0 }
+
+@(private="file")
+Internal_Features :: bit_set[Internal_Feature; u32]
+
+@(private="file")
 Context :: struct
 {
     validation: bool,
     features: Features,
+    internal_features: Internal_Features,
     instance: vk.Instance,
     debug_messenger: vk.DebugUtilsMessengerEXT,
     surface: vk.SurfaceKHR,
@@ -127,6 +134,7 @@ Alloc_Info :: struct
 {
     buf_handle: vk.Buffer,
     allocation: vma.Allocation,
+    memory_type: u32,
     cpu: rawptr,
     gpu: rawptr,
     align: u32,
@@ -339,6 +347,13 @@ _init :: proc(validation := true, loc := #caller_location)
             }
         }
 
+        for &supported_ext in extensions {
+            if cstring(&supported_ext.extensionName[0]) == "VK_EXT_host_image_copy" {
+                ctx.internal_features += { .Host_Image_Copy }
+                break
+            }
+        }
+
         ray_query_features := vk.PhysicalDeviceRayQueryFeaturesKHR {
             sType = .PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR
         }
@@ -428,6 +443,9 @@ _init :: proc(validation := true, loc := #caller_location)
         append(&required_extensions, vk.EXT_SHADER_OBJECT_EXTENSION_NAME)
         append(&required_extensions, vk.EXT_DESCRIPTOR_BUFFER_EXTENSION_NAME)
         append(&required_extensions, vk.KHR_DRAW_INDIRECT_COUNT_EXTENSION_NAME)
+        if .Host_Image_Copy in ctx.internal_features {
+            append(&required_extensions, "VK_EXT_host_image_copy")
+        }
         if .Raytracing in ctx.features
         {
             append(&required_extensions, vk.KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME)
@@ -494,6 +512,12 @@ _init :: proc(validation := true, loc := #caller_location)
             rayQuery = true,
         }
         if .Raytracing in ctx.features do next = rayquery_features
+        host_image_copy_features := &vk.PhysicalDeviceHostImageCopyFeaturesEXT {
+            sType = .PHYSICAL_DEVICE_HOST_IMAGE_COPY_FEATURES_EXT,
+            pNext = next,
+            hostImageCopy = true,
+        }
+        if .Host_Image_Copy in ctx.internal_features do next = host_image_copy_features
 
         device_ci := vk.DeviceCreateInfo {
             sType = .DEVICE_CREATE_INFO,
@@ -1178,6 +1202,13 @@ _mem_alloc_raw :: proc(#any_int el_size, #any_int el_count, #any_int align: i64,
         {
             buf_usage = Descriptor_Buffer_Usage
         }
+        case .Texture:
+        {
+            buf_usage = { .SHADER_DEVICE_ADDRESS, .TRANSFER_SRC, .TRANSFER_DST }
+            if .Host_Image_Copy in ctx.internal_features {
+                properties += { .HOST_VISIBLE }
+            }
+        }
     }
 
     buf_ci := vk.BufferCreateInfo {
@@ -1219,6 +1250,7 @@ _mem_alloc_raw :: proc(#any_int el_size, #any_int el_count, #any_int align: i64,
     alloc_info := Alloc_Info {
         allocation = alloc,
         buf_handle = buf,
+        memory_type = vma_alloc_info.memory_type,
         cpu = p.cpu,
         gpu = p.gpu.ptr,
         align = u32(align),
@@ -1255,6 +1287,23 @@ _mem_free_raw :: proc(addr: gpuptr, loc := #caller_location)
 }
 
 // Textures
+to_vk_image_create_info :: proc(desc: Texture_Desc) -> vk.ImageCreateInfo
+{
+    usage := to_vk_texture_usage(desc.usage) + { .TRANSFER_DST }
+    if .Host_Image_Copy in ctx.internal_features do usage += { .HOST_TRANSFER }
+    return {
+        sType = .IMAGE_CREATE_INFO,
+        imageType = to_vk_texture_type(desc.type),
+        format = to_vk_texture_format(desc.format),
+        extent = vk.Extent3D { desc.dimensions.x, desc.dimensions.y, desc.dimensions.z },
+        mipLevels = desc.mip_count,
+        arrayLayers = desc.layer_count,
+        samples = to_vk_sample_count(desc.sample_count),
+        usage = usage,
+        initialLayout = .UNDEFINED,
+    }
+}
+
 _texture_size_and_align :: proc(desc: Texture_Desc, loc := #caller_location) -> (size: u64, align: u64)
 {
     desc_clean := texture_desc_cleanup(desc)
@@ -1287,8 +1336,6 @@ _texture_create :: proc(desc: Texture_Desc, storage: gpuptr, queue: Queue = .Mai
 
     desc_clean := texture_desc_cleanup(desc)
 
-    vk_signal_sem := pool_get(&ctx.semaphores, signal_sem) if signal_sem != {} else vk.Semaphore(0)
-    queue_to_use := queue
     alloc_info := pool_get(&ctx.allocs, transmute(Alloc_Handle) storage._impl[0])
 
     image: vk.Image
@@ -1299,8 +1346,25 @@ _texture_create :: proc(desc: Texture_Desc, storage: gpuptr, queue: Queue = .Mai
     plane_aspect: vk.ImageAspectFlags = { .DEPTH } if desc_clean.format == .D32_Float else { .COLOR }
 
     // Transition layout from UNDEFINED to GENERAL
-    {
-        cmd_buf := vk_acquire_cmd_buf(queue_to_use)
+    // Use host-side layout transition if supported and no semaphore is used
+    if .Host_Image_Copy in ctx.internal_features && signal_value == 0 {
+        transition_info := vk.HostImageLayoutTransitionInfoEXT {
+            sType            = .HOST_IMAGE_LAYOUT_TRANSITION_INFO_EXT,
+            image            = image,
+            oldLayout        = .UNDEFINED,
+            newLayout        = .GENERAL,
+            subresourceRange = {
+                aspectMask     = plane_aspect,
+                baseMipLevel   = 0,
+                levelCount     = desc_clean.mip_count,
+                baseArrayLayer = 0,
+                layerCount     = desc_clean.layer_count,
+            },
+        }
+
+        vk_check(vk.TransitionImageLayoutEXT(ctx.device, 1, &transition_info))
+    } else {
+        cmd_buf := vk_acquire_cmd_buf(queue)
         cmd_buf_info := pool_get(&ctx.command_buffers, cmd_buf)
         vk_cmd_buf := cmd_buf_info.handle
 
@@ -1337,7 +1401,6 @@ _texture_create :: proc(desc: Texture_Desc, storage: gpuptr, queue: Queue = .Mai
     }
 
     tex_info := Texture_Info { image, {} }
-    sync.guard(&ctx.lock)
     return {
         dimensions = desc_clean.dimensions,
         format = desc_clean.format,

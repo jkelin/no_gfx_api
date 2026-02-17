@@ -287,17 +287,3 @@ to_vk_blend_factor :: proc(blend: Blend_Factor) -> vk.BlendFactor
     return {}
 }
 
-to_vk_image_create_info :: proc(desc: Texture_Desc) -> vk.ImageCreateInfo
-{
-    return {
-        sType = .IMAGE_CREATE_INFO,
-        imageType = to_vk_texture_type(desc.type),
-        format = to_vk_texture_format(desc.format),
-        extent = vk.Extent3D { desc.dimensions.x, desc.dimensions.y, desc.dimensions.z },
-        mipLevels = desc.mip_count,
-        arrayLayers = desc.layer_count,
-        samples = to_vk_sample_count(desc.sample_count),
-        usage = to_vk_texture_usage(desc.usage) + { .TRANSFER_DST },
-        initialLayout = .UNDEFINED,
-    }
-}
